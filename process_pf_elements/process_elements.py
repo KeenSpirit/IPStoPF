@@ -231,13 +231,13 @@ def process_elements(app, selected_grid):
             if result_hv is not None:
                 result_hv[1].add(tfmr_hv_element)
             else:
-                failed_matches.cap_banks.append(tr_2w)
+                failed_matches.tfmrs.append(tr_2w)
             result_lv = add_element_by_obj_match(sites, tr_2w.buslv.cterm)
-            if result_hv is not None:
+            if result_lv is not None:
                 result_lv[1].add(tfmr_lv_element)
             else:
                 if tr_2w not in failed_matches.cap_banks:
-                    failed_matches.cap_banks.append(tr_2w)
+                    failed_matches.tfmrs.append(tr_2w)
 
     for site in sites:
         ind.dump_substation(app, site)
