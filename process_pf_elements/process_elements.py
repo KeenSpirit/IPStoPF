@@ -303,6 +303,14 @@ def process_elements(app, selected_grid):
                 if tr_3w not in failed_matches.tfmrs:
                     failed_matches.tfmrs.append(tr_3w)
 
+    # Update bus cubicle for every bus at every site
+    for site in sites:
+        busbars = [el for v1 in site.voltage_levels.values()
+                   for el in v1.elements.get(dc.ElementType.BUSBAR, {}).values()]
+        for bus in busbars:
+            cub = bp.determine_bus_cubicle(bus.obj, site)
+            bus.relay_cubicle = dc.RelayCubicle(cub, None)
+
     for site in sites:
         ind.dump_substation(app, site)
     app.PrintPlain(failed_matches)

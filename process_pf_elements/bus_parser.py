@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from domain import sub_dataclass as dc
+
 # (1) 3 alpha  (2) float volts + "kV"  (3) optional "B"+[1-9], then "_Term"  (4) optional "(n)"
 _PATTERN = re.compile(r"([A-Za-z]{3})(\d+(?:\.\d+)?)kV(?:B([1-9]))?_Term(?:\((\d+)\))?")
 
@@ -53,20 +55,54 @@ def parse_strings(strings):
     return matched, unmatched
 
 
-if __name__ == "__main__":
-    from openpyxl import load_workbook
+def determine_bus_cubicle(bus, site):
+    """Priority of bus cubicle assignment for the purpose of placing protection devices:
+    1) coupler cubicle, 2) transformer LV cubicle, 3) first feeder cubicle"""
 
-    wb = load_workbook("/mnt/user-data/uploads/test_data.xlsx", read_only=True)
-    ws = wb.active
-    strings = [row[0] for row in ws.iter_rows(values_only=True) if row[0] is not None]
+    cubicles = bus.GetContents("*.StaCubic")
+    cubicles_with_switches = []
+    for cubicle in cubicles:
+        switch = [element for element in cubicle if element.GetClassName() == "StaSwitch"]
+        if switch:
+            cubicles_with_switches.append(cubicle)
 
-    matched, unmatched = parse_strings(strings)
+    if cubicles_with_switches:
+        elements_with_switches = [cubicle.obj_id for cubicle in cubicles_with_switches]
+        target_element = select_object(elements_with_switches, site, key=lambda o: o)
+    else:
+        elements = [cubicle.obj_id for cubicle in cubicles]
+        target_element = select_object(elements, site, key=lambda o: o)
 
-    print(f"{len(strings)} strings | {len(matched)} matched | {len(unmatched)} unmatched\n")
-    print(f"{'source':22} {'substation':11} {'voltage':9} {'bus'}")
-    print("-" * 55)
-    for p in matched:
-        print(f"{p.source:22} {p.substation:11} {p.voltage_level:9} {p.bus}")
+    target_cubicle =[cub for cub in cubicles if cub.obj_id == target_element][0]
+    return target_cubicle
 
-    print("\nSynthetic duplicate example:")
-    print(" ", parse_bus("ABM33kVB1_Term(2)"))
+
+
+# Tiers in priority order. None = "any element type".
+_TIERS = [
+    {dc.ElementType.SWITCH},
+    {dc.ElementType.TRANSFORMER_LV, dc.ElementType.TRANSFORMER_LV_A, dc.ElementType.TRANSFORMER_LV_B},
+    {dc.ElementType.TRANSFORMER_HV},
+    {dc.ElementType.FEEDER},
+    None,
+]
+
+def select_object(obj_list, site: dc.Site, key=lambda o: o):
+    """Return the highest-priority matching object from obj_list, else obj_list[0]."""
+    # One pass over the site: (matched-key, element_type) for every element carrying an obj.
+    site_elems = [
+        (key(el.obj), el.element_type)
+        for vl in site.voltage_levels.values()
+        for by_name in vl.elements.values()
+        for el in by_name.values()
+        if el.obj is not None
+    ]
+    targets = [(obj, key(obj)) for obj in obj_list]
+
+    for allowed in _TIERS:
+        for obj, target in targets:
+            for el_key, el_type in site_elems:
+                if el_key == target and (allowed is None or el_type in allowed):
+                    return obj
+    return obj_list[0]
+
