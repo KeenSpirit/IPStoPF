@@ -6,6 +6,8 @@ import time
 import powerfactory as pf
 from user_interface import user_input as ui, obtain_all_grids as oag
 from process_pf_elements import process_elements as pe
+from mapping import reconcile
+from process_ips import ingest_ips_export as iie
 
 from importlib import reload
 
@@ -23,9 +25,12 @@ def run_main():
     # Turn the echo off (suppress output window messages)
     echo(app)
 
+    ips = iie.ingest_ips_export(csv_path)
+
     exg_grids_sorted = oag.all_egx_grids(app)
     selected_grid = ui.select_object(exg_grids_sorted)
-    pe.process_elements(app, selected_grid)
+    sites = pe.process_elements(app, selected_grid)
+    result = reconcile(ips.by_key, pf)
 
     # Restore the echo
     echo(app, off=False)

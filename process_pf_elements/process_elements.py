@@ -315,6 +315,8 @@ def process_elements(app, selected_grid):
         ind.dump_substation(app, site)
     app.PrintPlain(failed_matches)
 
+    return sites
+
 
 def check_new_site(sites,new_site):
     site_names = {site.name: site for site in sites}
