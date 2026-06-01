@@ -60,6 +60,9 @@ RELAY_SKELETONS_PATH = os.path.join(
 # Base directory for all mapping files (in project root)
 MAPPING_FILES_BASE = PROJECT_ROOT / "mapping_files"
 
+# Temp IPS export data
+IPS_EXPORT_DATA = MAPPING_FILES_BASE / "ips_export_data"
+
 # CB alternate names mapping
 CB_ALT_NAMES_DIR = MAPPING_FILES_BASE / "cb_alt_names"
 
@@ -148,6 +151,16 @@ def ensure_path_exists(path: str) -> str:
     """
     os.makedirs(path, exist_ok=True)
     return path
+
+
+def get_ips_data() -> Path:
+    """
+    Get the full path to temporary IPS data directory.
+
+    Returns:
+        Path to Report-Cache-ProtectionSettingIDs-EX.csv
+    """
+    return IPS_EXPORT_DATA / "Report-Cache-ProtectionSettingIDs-EX.csv"
 
 
 def get_cb_alt_name_file() -> Path:

@@ -27,10 +27,9 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-# Shared key/voltage vocabulary. (MappingKey currently lives in process_ips;
+# Shared key/voltage vocabulary. (MappingKey currently lives in mapping_key;
 # it is the common join vocabulary for both sides.)
-from process_ips.ips_records import MappingKey, VoltageKv
-
+from domain.mapping_key import MappingKey, VoltageKv
 
 # Voltage level -> IPS designation voltage digit.
 VOLTAGE_DIGIT = {11: "1", 33: "3", 110: "7", 132: "8"}

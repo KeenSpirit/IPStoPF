@@ -31,7 +31,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from process_ips.ips_records import IpsDevice, MappingKey
+
+from domain.mapping_key import MappingKey
+from process_ips.ips_records import IpsDevice
 from mapping.pf_source import PfElementRef, PfSourceResult
 
 

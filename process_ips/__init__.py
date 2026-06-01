@@ -12,14 +12,14 @@ Quick start:
     devices = result.by_key[MappingKey("ABM", 33, "BB31")]
 """
 
+from domain.mapping_key import VoltageKv, MappingKey
+
 from process_ips.ips_records import (
-    MappingKey,
     IpsDevice,
     IpsElementType,
     ExcludedRow,
     ExclusionReason,
     IpsIngestResult,
-    VoltageKv,
 )
 from process_ips.ips_ingest import (
     ingest_ips_export,

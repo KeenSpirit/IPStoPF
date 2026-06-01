@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from process_ips.ips_records import MappingKey, VoltageKv
+from domain.mapping_key import MappingKey, VoltageKv
 from process_pf_elements import pf_normalise as pn
 
 

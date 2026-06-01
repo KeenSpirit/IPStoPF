@@ -47,14 +47,14 @@ from typing import Iterable, List, Optional
 
 from config.region_config import get_substation_mapping
 
+from domain.mapping_key import VoltageKv, MappingKey
+
 from process_ips.ips_records import (
     ExcludedRow,
     ExclusionReason,
     IpsDevice,
     IpsElementType,
     IpsIngestResult,
-    MappingKey,
-    VoltageKv,
 )
 
 

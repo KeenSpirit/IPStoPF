@@ -2,7 +2,9 @@
 Tests for the PowerFactory normalisation and the join + reconciliation stage.
 Offline; run with:  pytest mapping/test_reconcile.py
 """
-from process_ips.ips_records import IpsDevice, IpsElementType, MappingKey
+
+from domain.mapping_key import MappingKey
+from process_ips.ips_records import IpsDevice, IpsElementType
 from process_pf_elements import pf_normalise as pn
 from mapping.pf_source import PfElementRef, PfSourceResult
 from mapping.reconcile import (

@@ -30,7 +30,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from domain import mapping_key as mk
 from enum import Enum
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional
 
 
 class IpsElementType(Enum):

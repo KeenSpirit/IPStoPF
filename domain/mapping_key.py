@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+from typing import Union
 
 VoltageKv = Union[int, float, str]
 

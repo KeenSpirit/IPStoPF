@@ -6,8 +6,9 @@ import time
 import powerfactory as pf
 from user_interface import user_input as ui, obtain_all_grids as oag
 from process_pf_elements import process_elements as pe
-from mapping import reconcile
-from process_ips import ingest_ips_export as iie
+from mapping import reconcile, pf_source
+from process_ips import ips_ingest as ii
+from config import paths
 
 from importlib import reload
 
@@ -17,7 +18,7 @@ reload(pe)
 def run_main():
 
     start = time.time()
-    app = pf.GetApplicationExt()
+    app = pf.GetApplication()
     app.ClearOutputWindow()
     # Enables the user to manually stop the script
     app.SetEnableUserBreak(1)
@@ -25,12 +26,15 @@ def run_main():
     # Turn the echo off (suppress output window messages)
     echo(app)
 
-    ips = iie.ingest_ips_export(csv_path)
+    ips_export = paths.get_ips_data()
+    ips = ii.ingest_ips_export(str(ips_export))
 
     exg_grids_sorted = oag.all_egx_grids(app)
     selected_grid = ui.select_object(exg_grids_sorted)
     sites = pe.process_elements(app, selected_grid)
-    result = reconcile(ips.by_key, pf)
+    pf_result = pf_source.pf_refs_from_sites(sites)
+    result = reconcile(ips.by_key, pf_result)
+    app.PrintPlain(result)
 
     # Restore the echo
     echo(app, off=False)
