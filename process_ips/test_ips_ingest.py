@@ -14,7 +14,9 @@ from process_ips.ips_ingest import (
     resolve_site_code,
     scope_exclusion,
 )
-from process_ips.ips_records import ExclusionReason, IpsElementType, MappingKey
+
+from domain.mapping_key import MappingKey
+from process_ips.ips_records import ExclusionReason, IpsElementType
 
 
 # --------------------------------------------------------------------------- #

@@ -42,6 +42,7 @@ TIER_EXACT = "exact"
 TIER_LV_WINDING = "lv_to_lowest_winding"
 TIER_COUPLER_BASE = "coupler_base"
 
+CATEGORY_SUBSTATIONS = "Substations"
 
 @dataclass
 class MatchedElement:
@@ -60,6 +61,7 @@ class ReconciliationResult:
     matched: List[MatchedElement] = field(default_factory=list)
     ips_only: Dict[MappingKey, List[IpsDevice]] = field(default_factory=dict)
     pf_only: List[PfElementRef] = field(default_factory=list)
+    ignored: Dict[MappingKey, List[IpsDevice]] = field(default_factory=dict)
 
     # ----------------------------------------------------------- statistics
     @property
@@ -81,6 +83,14 @@ class ReconciliationResult:
     @property
     def pf_only_count(self) -> int:
         return len(self.pf_only)
+
+    @property
+    def ignored_keys(self) -> int:
+        return len(self.ignored)
+
+    @property
+    def ignored_setting_ids(self) -> int:
+        return sum(len(v) for v in self.ignored.values())
 
     def tier_counts(self) -> Dict[str, int]:
         out: Dict[str, int] = {}
@@ -115,6 +125,8 @@ class ReconciliationResult:
             f"    mapped to a PF cubicle : {self.matched_setting_ids}  ({spc:.1f}%)",
             f"    unmapped               : {self.ips_only_setting_ids}",
             f"  PF elements with no IPS device : {self.pf_only_count}",
+            f"  ignored (substation not in PF) : {self.ignored_keys} keys, "
+            f"{self.ignored_setting_ids} setting IDs",
             f"  match tiers              : {self.tier_counts()}",
         ]
         return "\n".join(lines)
@@ -128,19 +140,11 @@ def _is_numeric_voltage(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
-def reconcile(ips_by_key: Dict[MappingKey, List[IpsDevice]],
-              pf: PfSourceResult,
-              use_fallbacks: bool = True) -> ReconciliationResult:
-    """Join IPS devices (keyed) against PowerFactory element references.
-
-    Args:
-        ips_by_key: ``IpsIngestResult.by_key``
-        pf:         result from ``mapping.pf_source``
-        use_fallbacks: enable the LV-winding and coupler-base fallbacks
-    """
+def reconcile(ips_by_key, pf, use_fallbacks=True,
+              ignore_substations_absent_from_pf=True):
     result = ReconciliationResult()
-
-    pf_by_key: Dict[MappingKey, List[PfElementRef]] = pf.by_key()
+    pf_by_key = pf.by_key()
+    pf_sites = {r.key.site_code for r in pf.refs}
 
     # Secondary index for the LV fallback: (site, designation) -> refs (numeric V)
     pf_by_site_desc: Dict[tuple, List[PfElementRef]] = {}
@@ -154,6 +158,17 @@ def reconcile(ips_by_key: Dict[MappingKey, List[IpsDevice]],
         claimed.add(ref.key)
 
     for key, devices in ips_by_key.items():
+        for key, devices in ips_by_key.items():
+            # ---- Substation-site filter --------------------------------------
+            # Only consider substation devices whose site exists in PowerFactory;
+            # those at sites PF doesn't model are ignored entirely.
+            if (ignore_substations_absent_from_pf
+                    and devices
+                    and devices[0].category == CATEGORY_SUBSTATIONS
+                    and key.site_code not in pf_sites):
+                result.ignored[key] = devices
+                continue
+
         # ---- Tier 1: exact ------------------------------------------------
         if key in pf_by_key:
             ref = pf_by_key[key][0]

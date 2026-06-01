@@ -15,7 +15,7 @@ from mapping.pf_source import (
     pf_refs_from_sites,
     pf_refs_from_workbook,
 )
-from mapping.reconcile import (
+from mapping.reconciliation import (
     MatchedElement,
     ReconciliationResult,
     reconcile,

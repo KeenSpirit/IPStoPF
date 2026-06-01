@@ -7,7 +7,7 @@ from domain.mapping_key import MappingKey
 from process_ips.ips_records import IpsDevice, IpsElementType
 from process_pf_elements import pf_normalise as pn
 from mapping.pf_source import PfElementRef, PfSourceResult
-from mapping.reconcile import (
+from mapping.reconciliation import (
     TIER_COUPLER_BASE,
     TIER_EXACT,
     TIER_LV_WINDING,
@@ -62,12 +62,12 @@ def test_make_pf_key_full():
 # Reconciliation
 # --------------------------------------------------------------------------- #
 
-def _dev(setting_id, key, etype=IpsElementType.BUSBAR):
+def _dev(setting_id, key, etype=IpsElementType.BUSBAR, category="Substations"):
     return IpsDevice(
         setting_id=setting_id, key=key, element_type=etype,
         pattern_name="P", date_setting="2020-01-01", device_id="", asset_name="A",
         location_path="x", raw_site_code=key.site_code, raw_designation=key.designation,
-        voltage_raw=str(key.voltage_kv), category="Substations",
+        voltage_raw=str(key.voltage_kv), category=category,
     )
 
 
@@ -90,7 +90,7 @@ def test_exact_match():
 
 def test_ips_only_and_pf_only():
     ik = MappingKey("AAA", 33, "F3001")
-    pk = MappingKey("BBB", 33, "F3002")
+    pk = MappingKey("AAA", 33, "F3002")
     ips = {ik: [_dev("S1", ik, IpsElementType.FEEDER)]}
     pf = PfSourceResult(refs=[_ref(pk, pn.CAT_FEEDER)])
     rec = reconcile(ips, pf)
@@ -131,3 +131,51 @@ def test_fallbacks_can_be_disabled():
     rec = reconcile(ips, pf, use_fallbacks=False)
     assert rec.matched_keys == 0
     assert rec.ips_only_keys == 1
+
+# --------------------------------------------------------------------------- #
+# Substation-site filter
+# --------------------------------------------------------------------------- #
+
+def test_substation_at_non_pf_site_is_ignored():
+    # IPS substation device at a site PowerFactory does not model -> ignored.
+    ik = MappingKey("ZZZ", 33, "F3001")
+    pk = MappingKey("AAA", 33, "F3002")
+    ips = {ik: [_dev("S1", ik, IpsElementType.FEEDER)]}
+    pf = PfSourceResult(refs=[_ref(pk, pn.CAT_FEEDER)])
+    rec = reconcile(ips, pf)
+    assert rec.ignored_keys == 1
+    assert rec.ignored_setting_ids == 1
+    assert rec.ips_only_keys == 0
+    assert rec.matched_keys == 0
+
+
+def test_down_line_device_at_non_pf_site_still_ips_only():
+    # Down Line Device handling is unchanged: still surfaced as ips-only.
+    ik = MappingKey("X12797-B", 33, "X12797-B")
+    pk = MappingKey("AAA", 33, "F3002")
+    ips = {ik: [_dev("S1", ik, IpsElementType.LINE_SWITCH, category="Down Line Devices")]}
+    pf = PfSourceResult(refs=[_ref(pk, pn.CAT_FEEDER)])
+    rec = reconcile(ips, pf)
+    assert rec.ips_only_keys == 1
+    assert rec.ignored_keys == 0
+
+
+def test_substation_at_pf_site_with_no_element_is_ips_only():
+    # Site exists in PF but this particular element does not -> genuine divergence.
+    ik = MappingKey("ABM", 33, "F3001")
+    pk = MappingKey("ABM", 33, "F3002")
+    ips = {ik: [_dev("S1", ik, IpsElementType.FEEDER)]}
+    pf = PfSourceResult(refs=[_ref(pk, pn.CAT_FEEDER)])
+    rec = reconcile(ips, pf)
+    assert rec.ips_only_keys == 1
+    assert rec.ignored_keys == 0
+
+
+def test_substation_filter_can_be_disabled():
+    ik = MappingKey("ZZZ", 33, "F3001")
+    pk = MappingKey("AAA", 33, "F3002")
+    ips = {ik: [_dev("S1", ik, IpsElementType.FEEDER)]}
+    pf = PfSourceResult(refs=[_ref(pk, pn.CAT_FEEDER)])
+    rec = reconcile(ips, pf, ignore_substations_absent_from_pf=False)
+    assert rec.ips_only_keys == 1
+    assert rec.ignored_keys == 0

@@ -60,9 +60,11 @@ def determine_bus_cubicle(bus, site):
     1) coupler cubicle, 2) transformer LV cubicle, 3) first feeder cubicle"""
 
     cubicles = bus.GetContents("*.StaCubic")
+    if not cubicles:
+        return None
     cubicles_with_switches = []
     for cubicle in cubicles:
-        switch = [element for element in cubicle if element.GetClassName() == "StaSwitch"]
+        switch = [element for element in cubicle.GetContents() if element.GetClassName() == "StaSwitch"]
         if switch:
             cubicles_with_switches.append(cubicle)
 

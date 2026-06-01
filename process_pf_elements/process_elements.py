@@ -58,10 +58,6 @@ def process_elements(app, selected_grid):
                 sites.append(site)
             add_element(site, nominal_kv, bus_element)
 
-    for site in sites:
-        ind.dump_substation(app, site)
-    app.PrintPlain(failed_matches)
-
     app.PrintPlain("Parsing lines...")
     for line in lines:
         # Get name
@@ -114,10 +110,6 @@ def process_elements(app, selected_grid):
             )
             result_j[1].add(new_element)
 
-    for site in sites:
-        ind.dump_substation(app, site)
-    app.PrintPlain(failed_matches)
-
     app.PrintPlain("Parsing cap banks...")
     for cap_bank in cap_banks:
 
@@ -151,10 +143,6 @@ def process_elements(app, selected_grid):
             else:
                 failed_matches.cap_banks.append(cap_bank)
 
-    for site in sites:
-        ind.dump_substation(app, site)
-    app.PrintPlain(failed_matches)
-
     app.PrintPlain("Parsing switches...")
     for switch in switches:
 
@@ -181,23 +169,24 @@ def process_elements(app, selected_grid):
             site = check_new_site(sites, new_site)
             add_element(site, nominal_kv, switch_element)
         else:
-            result = add_element_by_obj_match(sites, switch.bus1.cterm)
-            if result is not None:
-                result[1].add(switch_element)
+            cub = switch.bus1
+            if cub is not None:
+                result = add_element_by_obj_match(sites, switch.bus1.cterm)
+                if result is not None:
+                    result[1].add(switch_element)
+                else:
+                    failed_matches.switches.append(switch)
             else:
                 failed_matches.switches.append(switch)
-
-    for site in sites:
-        ind.dump_substation(app, site)
-    app.PrintPlain(failed_matches)
-
 
     app.PrintPlain("Parsing transformers...")
     for tr_2w in tr_2winds:
 
         # Get voltage levels
-        nominal_hv_kv = tr_2w.typ_id.utrn_h
-        nominal_lv_kv = tr_2w.typ_id.utrn_l
+        tr_type = tr_2w.typ_id
+        if tr_type is not None:
+            nominal_hv_kv = tr_2w.typ_id.utrn_h
+            nominal_lv_kv = tr_2w.typ_id.utrn_l
 
         # Get name
         parsed_tfmr = tp.parse_tfmr(tr_2w.loc_name)
@@ -221,7 +210,7 @@ def process_elements(app, selected_grid):
         )
 
         # Assign element to a site
-        if parsed_tfmr is not None:
+        if parsed_tfmr is not None and tr_type is not None:
             new_site = parsed_tfmr.substation
             site = check_new_site(sites, new_site)
             add_element(site, nominal_hv_kv, tfmr_hv_element)
@@ -236,19 +225,18 @@ def process_elements(app, selected_grid):
             if result_lv is not None:
                 result_lv[1].add(tfmr_lv_element)
             else:
-                if tr_2w not in failed_matches.cap_banks:
+                if tr_2w not in failed_matches.tfmrs:
                     failed_matches.tfmrs.append(tr_2w)
-
-    for site in sites:
-        ind.dump_substation(app, site)
-    app.PrintPlain(failed_matches)
 
     for tr_3w in tr_3winds:
 
         # Get voltage levels
-        nominal_hv_kv = tr_3w.typ_id.utrn3_h
-        nominal_mv_kv = tr_3w.typ_id.utrn3_m
-        nominal_lv_kv = tr_3w.typ_id.utrn3_l
+        # Get voltage levels
+        tr_type = tr_3w.typ_id
+        if tr_type is not None:
+            nominal_hv_kv = tr_3w.typ_id.utrn3_h
+            nominal_mv_kv = tr_3w.typ_id.utrn3_m
+            nominal_lv_kv = tr_3w.typ_id.utrn3_l
 
         # Get name
         parsed_tfmr = tp.parse_tfmr(tr_3w.loc_name)
@@ -278,7 +266,7 @@ def process_elements(app, selected_grid):
         )
 
         # Assign element to a site
-        if parsed_tfmr is not None:
+        if parsed_tfmr is not None and tr_type is not None:
             new_site = parsed_tfmr.substation
             site = check_new_site(sites, new_site)
             add_element(site, nominal_hv_kv, tfmr_hv_element)
@@ -310,10 +298,6 @@ def process_elements(app, selected_grid):
         for bus in busbars:
             cub = bp.determine_bus_cubicle(bus.obj, site)
             bus.relay_cubicle = dc.RelayCubicle(cub, None)
-
-    for site in sites:
-        ind.dump_substation(app, site)
-    app.PrintPlain(failed_matches)
 
     return sites
 

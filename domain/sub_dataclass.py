@@ -31,7 +31,7 @@ class Element:
     name: str
     obj: object
     element_type: ElementType
-    relay_cubicle: Any[None | RelayCubicle]
+    relay_cubicle: Optional[RelayCubicle]
 
 
 @dataclass

@@ -6,8 +6,9 @@ import time
 import powerfactory as pf
 from user_interface import user_input as ui, obtain_all_grids as oag
 from process_pf_elements import process_elements as pe
-from mapping import reconcile, pf_source
+from mapping import reconciliation as recon, pf_source
 from process_ips import ips_ingest as ii
+from mapping.report import write_reconciliation_report
 from config import paths
 
 from importlib import reload
@@ -30,11 +31,15 @@ def run_main():
     ips = ii.ingest_ips_export(str(ips_export))
 
     exg_grids_sorted = oag.all_egx_grids(app)
-    selected_grid = ui.select_object(exg_grids_sorted)
-    sites = pe.process_elements(app, selected_grid)
+    # selected_grid = ui.select_object(exg_grids_sorted)
+    sites = []
+    for selected_grid in exg_grids_sorted:
+        sites.extend(pe.process_elements(app, selected_grid))
     pf_result = pf_source.pf_refs_from_sites(sites)
-    result = reconcile(ips.by_key, pf_result)
-    app.PrintPlain(result)
+    result = recon.reconcile(ips.by_key, pf_result)
+    app.PrintPlain(result.coverage_summary())
+    report_path = write_reconciliation_report(result, paths.get_output_directory())
+    app.PrintPlain(f"Reconciliation report written to: {report_path}")
 
     # Restore the echo
     echo(app, off=False)
