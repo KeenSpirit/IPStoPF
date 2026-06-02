@@ -13,10 +13,13 @@ class ElementType(Enum):
     TRANSFORMER_LV   = "Transformer LV"
     TRANSFORMER_LV_A = "Transformer LV A"
     TRANSFORMER_LV_B = "Transformer LV B"
+    TRANSFORMER      = "Transformer"
     BUSBAR           = "Busbar"
     SWITCH           = "Switch"
+    SPARE_SWITCH     = "Spare switch"
     CAPACITOR_BANK   = "Capacitor bank"
     FEEDER           = "Feeder"
+    GEN_CUBICLE      = "Generator Cubicle"
 
 
 @dataclass

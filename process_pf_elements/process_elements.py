@@ -3,7 +3,8 @@ from process_pf_elements import (
     line_parser as lp,
     cap_bank_parser as cbp,
     switch_parser as swp,
-    tfmr_parser as tp)
+    tfmr_parser as tp,
+    tfmr_names as tn)
 from domain import sub_dataclass as dc, inspect_dataclass as ind
 
 from importlib import reload
@@ -93,22 +94,23 @@ def process_elements(app, selected_grid):
             result_i[1].add(new_element)
         # If a terminal matches any bus belonging to a substation,
         # add the line to that substation as a feeder element.
-        elif result_i is not None:
-            new_element = dc.Element(
-                name=feeder_name,
-                obj=line,
-                element_type=dc.ElementType.FEEDER,
-                relay_cubicle=dc.RelayCubicle(cubicle_i, None)
-            )
-            result_i[1].add(new_element)
-        elif result_j is not None:
-            new_element = dc.Element(
-                name=feeder_name,
-                obj=line,
-                element_type=dc.ElementType.FEEDER,
-                relay_cubicle=dc.RelayCubicle(cubicle_j, None)
-            )
-            result_j[1].add(new_element)
+        else:
+            if result_i is not None:
+                new_element = dc.Element(
+                    name=feeder_name,
+                    obj=line,
+                    element_type=dc.ElementType.FEEDER,
+                    relay_cubicle=dc.RelayCubicle(cubicle_i, None)
+                )
+                result_i[1].add(new_element)
+            if result_j is not None:
+                new_element = dc.Element(
+                    name=feeder_name,
+                    obj=line,
+                    element_type=dc.ElementType.FEEDER,
+                    relay_cubicle=dc.RelayCubicle(cubicle_j, None)
+                )
+                result_j[1].add(new_element)
 
     app.PrintPlain("Parsing cap banks...")
     for cap_bank in cap_banks:
@@ -146,34 +148,85 @@ def process_elements(app, selected_grid):
     app.PrintPlain("Parsing switches...")
     for switch in switches:
 
-        # Get name & voltage level
+        # Get voltage
+        cub_1 = switch.bus1
+        cub_2 = switch.bus2
+        if cub_1 is not None:
+            nominal_kv = cub_1.cterm
+            cubicle = cub_1
+        elif cub_2 is not None:
+            nominal_kv = cub_2.cterm
+            cubicle = cub_2
+        else:
+            nominal_kv = None
+            cubicle = None
+
+        # Get raw name
         parsed_switch = swp.parse_switch(switch.loc_name)
         if parsed_switch is None:
-            switch_name = switch.loc_name
-            nominal_kv = None
+            s_raw_name = switch.loc_name
         else:
-            switch_name = parsed_switch.name
-            nominal_kv = parsed_switch.voltage_level
+            s_raw_name = parsed_switch.name
+
+
+        # Get element type and name
+        if s_raw_name[3] == "C":
+            name = "CP" + s_raw_name[5:6]
+            el_type = dc.ElementType.CAPACITOR_BANK
+        elif s_raw_name[3] == "K":
+            name = s_raw_name
+            el_type = dc.ElementType.GEN_CUBICLE
+        elif s_raw_name[3] == "T":
+            name = s_raw_name     # To be populated later
+            el_type = dc.ElementType.TRANSFORMER
+        elif "Spare" in s_raw_name or "SPARE" in s_raw_name:
+            name = s_raw_name
+            el_type = dc.ElementType.SPARE_SWITCH
+        elif s_raw_name[3] == "X" or s_raw_name[1] == "1":
+            name = s_raw_name
+            el_type = dc.ElementType.SWITCH
+        else:
+            # This is either a feeder of a switch
+            if cub_1 is not None:
+                terminal_i = cub_1.cterm
+                result_i = add_element_by_obj_match(sites, terminal_i)
+            else:
+                result_i = None
+            if cub_2 is not None:
+                terminal_j = cub_2.cterm
+                result_j = add_element_by_obj_match(sites, terminal_j)
+            else:
+                result_j = None
+
+            # If both terminals match buses belonging to a single substation, this switch is a bus coupler.
+            if result_i is not None and result_j is not None and result_j[0] == result_i[0]:
+                name = s_raw_name
+                el_type = dc.ElementType.SWITCH
+            # If a terminal matches any bus belonging to a substation,
+            # add the line to that substation as a feeder element.
+            else:
+                name = "F" + s_raw_name[2:-1]
+                el_type = dc.ElementType.FEEDER
 
         # Build element
-        switch_element = dc.Element(
-            name=switch_name,
+        new_element = dc.Element(
+            name=name,
             obj=switch,
-            element_type=dc.ElementType.SWITCH,
-            relay_cubicle=dc.RelayCubicle(switch.bus1, None)
+            element_type=el_type,
+            relay_cubicle=dc.RelayCubicle(cubicle, None)
         )
 
         # Assign element to a site
         if parsed_switch is not None:
             new_site = parsed_switch.substation
             site = check_new_site(sites, new_site)
-            add_element(site, nominal_kv, switch_element)
+            add_element(site, nominal_kv, new_element)
         else:
             cub = switch.bus1
             if cub is not None:
                 result = add_element_by_obj_match(sites, switch.bus1.cterm)
                 if result is not None:
-                    result[1].add(switch_element)
+                    result[1].add(new_element)
                 else:
                     failed_matches.switches.append(switch)
             else:
@@ -230,7 +283,6 @@ def process_elements(app, selected_grid):
 
     for tr_3w in tr_3winds:
 
-        # Get voltage levels
         # Get voltage levels
         tr_type = tr_3w.typ_id
         if tr_type is not None:
@@ -298,6 +350,12 @@ def process_elements(app, selected_grid):
         for bus in busbars:
             cub = bp.determine_bus_cubicle(bus.obj, site)
             bus.relay_cubicle = dc.RelayCubicle(cub, None)
+
+    # Update elmcoup transformer names
+    for site in sites:
+        tfmrs = [el for v1 in site.voltage_levels.values()
+                   for el in v1.elements.get(dc.ElementType.TRANSFORMER, {}).values()]
+        tn.update_element_names(tfmrs)
 
     return sites
 

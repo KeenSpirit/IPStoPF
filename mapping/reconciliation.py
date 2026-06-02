@@ -158,16 +158,15 @@ def reconcile(ips_by_key, pf, use_fallbacks=True,
         claimed.add(ref.key)
 
     for key, devices in ips_by_key.items():
-        for key, devices in ips_by_key.items():
-            # ---- Substation-site filter --------------------------------------
-            # Only consider substation devices whose site exists in PowerFactory;
-            # those at sites PF doesn't model are ignored entirely.
-            if (ignore_substations_absent_from_pf
-                    and devices
-                    and devices[0].category == CATEGORY_SUBSTATIONS
-                    and key.site_code not in pf_sites):
-                result.ignored[key] = devices
-                continue
+        # ---- Substation-site filter --------------------------------------
+        # Only consider substation devices whose site exists in PowerFactory;
+        # those at sites PF doesn't model are ignored entirely.
+        if (ignore_substations_absent_from_pf
+                and devices
+                and devices[0].category == CATEGORY_SUBSTATIONS
+                and key.site_code not in pf_sites):
+            result.ignored[key] = devices
+            continue
 
         # ---- Tier 1: exact ------------------------------------------------
         if key in pf_by_key:
