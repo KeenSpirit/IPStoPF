@@ -58,33 +58,49 @@ _DOMAIN_TYPE_TO_CATEGORY = {
     "Switch": pn.CAT_SWITCH,
     "Capacitor bank": pn.CAT_CAP_BANK,
     "Feeder": pn.CAT_FEEDER,
+    "Transformer": pn.CAT_TRANSFORMER,
     "Transformer HV": pn.CAT_TRANSFORMER,
     "Transformer LV": pn.CAT_TRANSFORMER,
     "Transformer LV A": pn.CAT_TRANSFORMER,
     "Transformer LV B": pn.CAT_TRANSFORMER,
+    "Generator Cubicle": pn.GEN_CUBICLE
 }
+
+TRANSFORMER_HV = "Transformer HV"
+TRANSFORMER_LV = "Transformer LV"
+TRANSFORMER_LV_A = "Transformer LV A"
+TRANSFORMER_LV_B = "Transformer LV B"
+TRANSFORMER = "Transformer"
+BUSBAR = "Busbar"
+SWITCH = "Switch"
+SPARE_SWITCH = "Spare switch"
+CAPACITOR_BANK = "Capacitor bank"
+FEEDER = "Feeder"
+GEN_CUBICLE = "Generator Cubicle"
+
+
+# When several elements at one (site, voltage) normalise to the same key, the
+# reconciler takes pf_by_key[key][0]. Emit the transformer breaker bay
+# (ElementType.TRANSFORMER) ahead of the winding bays so the breaker is matched.
+_EMIT_PRIORITY = {"Transformer": 0}
 
 
 def pf_refs_from_sites(sites) -> PfSourceResult:
-    """Build PF references from the live ``domain.Site`` structure.
-
-    Each element's ``name`` is already parsed; its voltage is the voltage-level
-    key; its cubicle is ``element.relay_cubicle.obj``.
-    """
     result = PfSourceResult()
     for site in sites:
         for voltage_kv, vl in site.voltage_levels.items():
-            for by_name in vl.elements.values():
-                for el in by_name.values():
-                    category = _DOMAIN_TYPE_TO_CATEGORY.get(el.element_type.value)
-                    if category is None:
-                        result.skipped.append(f"{site.name}:{el.name}:{el.element_type}")
-                        continue
-                    key = pn.make_pf_key(site.name, category, el.name, voltage_kv)
-                    cub = getattr(getattr(el, "relay_cubicle", None), "obj", None)
-                    result.refs.append(PfElementRef(
-                        key=key, category=category, raw_name=el.name,
-                        voltage_raw=voltage_kv, source=site.name, cubicle=cub))
+            elems = [el for by_name in vl.elements.values() for el in by_name.values()]
+            elems.sort(key=lambda el: _EMIT_PRIORITY.get(el.element_type.value, 99))
+            for el in elems:
+                category = _DOMAIN_TYPE_TO_CATEGORY.get(el.element_type.value)
+                if category is None:
+                    result.skipped.append(f"{site.name}:{el.name}:{el.element_type}")
+                    continue
+                key = pn.make_pf_key(site.name, category, el.name, voltage_kv)
+                cub = getattr(getattr(el, "relay_cubicle", None), "obj", None)
+                result.refs.append(PfElementRef(
+                    key=key, category=category, raw_name=el.name,
+                    voltage_raw=voltage_kv, source=site.name, cubicle=cub))
     return result
 
 

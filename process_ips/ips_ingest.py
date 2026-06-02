@@ -57,6 +57,7 @@ from process_ips.ips_records import (
     IpsIngestResult,
 )
 
+_RE_NX_TRANSFORMER = re.compile(r"^NX(\d+)$")
 
 # =============================================================================
 # CSV column layout (Report-Cache-ProtectionSettingIDs-EX.csv)
@@ -176,7 +177,13 @@ def normalise_designation(designation: str) -> str:
         'TR1'
     """
     first = designation.split("+", 1)[0].strip()
-    return first if first else designation.strip()
+    first = first if first else designation.strip()
+    # IPS names some transformer bays "NX<n>"; PowerFactory models them as
+    # "TR<n>". Bridge the synonym so the canonical key matches exactly.
+    m = _RE_NX_TRANSFORMER.match(first)
+    if m:
+        return "TR" + m.group(1)
+    return first
 
 
 # =============================================================================

@@ -31,11 +31,19 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-
 from domain.mapping_key import MappingKey
-from process_ips.ips_records import IpsDevice
 from mapping.pf_source import PfElementRef, PfSourceResult
 
+import re
+from typing import Dict, List, Optional, Tuple
+
+from process_ips.ips_records import IpsDevice, IpsElementType
+from process_pf_elements.pf_normalise import VOLTAGE_DIGIT, CAT_CAP_BANK
+
+TIER_CAP_BANK      = "cap_bank_voltage_digit"   # Rule 1, forms 1 & 2
+TIER_CAP_BANK_SOLE = "cap_bank_sole_device"     # Rule 2, last resort
+
+_RE_PLAIN_CP = re.compile(r"^CP(\d+)$")
 
 # Match tiers
 TIER_EXACT = "exact"
@@ -183,6 +191,11 @@ def reconcile(ips_by_key, pf, use_fallbacks=True,
                 claim(base_ref)
                 continue
 
+            cap_ref = _cap_bank_match(key, pf_by_key)
+            if cap_ref is not None:
+                result.matched.append(MatchedElement(key, cap_ref, devices, TIER_CAP_BANK))
+                claim(cap_ref); continue
+
             # ---- Tier 2b: LV -> lowest numeric winding --------------------
             if not _is_numeric_voltage(key.voltage_kv):
                 lv_ref = _lowest_winding_match(key, pf_by_site_desc)
@@ -193,6 +206,9 @@ def reconcile(ips_by_key, pf, use_fallbacks=True,
 
         # ---- No match -----------------------------------------------------
         result.ips_only[key] = devices
+
+    if use_fallbacks:
+        _sole_cap_bank_sweep(result, pf_by_key, claimed)
 
     # ---- PF elements never matched ---------------------------------------
     for key, refs in pf_by_key.items():
@@ -224,3 +240,46 @@ def _lowest_winding_match(key: MappingKey,
     if not refs:
         return None
     return min(refs, key=lambda r: r.key.voltage_kv)
+
+
+def _cap_bank_match(key, pf_by_key):
+    """Bare IPS 'CPn' -> PF voltage-digit form 'CP{vd}{n}' (Rule 1)."""
+    vd = VOLTAGE_DIGIT.get(key.voltage_kv) if isinstance(key.voltage_kv, int) else None
+    if vd is None:
+        return None
+    m = _RE_PLAIN_CP.match(key.designation)
+    if not m:
+        return None
+    digits = m.group(1)
+    if digits[0] == vd:          # already carries the voltage digit -> exact tier owns it
+        return None
+    refs = pf_by_key.get(MappingKey(key.site_code, key.voltage_kv, f"CP{vd}{digits}"))
+    return refs[0] if refs else None
+
+
+def _sole_cap_bank_sweep(result, pf_by_key, claimed):
+    """Rule 2 (last resort): where exactly one unmatched IPS cap bank and exactly
+    one unmatched PF cap bank remain at the same (site, voltage), pair them
+    regardless of name. CP1/CP2 can name the same bank, so with one candidate
+    left on each side the pairing is unambiguous. Deliberate risk: a site with a
+    genuinely IPS-only and a genuinely PF-only bank at one voltage will be paired."""
+    ips_caps: Dict[Tuple, List[MappingKey]] = {}
+    for key, devices in result.ips_only.items():
+        if devices and devices[0].element_type is IpsElementType.CAPACITOR_BANK:
+            ips_caps.setdefault((key.site_code, key.voltage_kv), []).append(key)
+
+    pf_caps: Dict[Tuple, List[MappingKey]] = {}
+    for key, refs in pf_by_key.items():
+        if key in claimed:
+            continue
+        if refs and refs[0].category == CAT_CAP_BANK:
+            pf_caps.setdefault((key.site_code, key.voltage_kv), []).append(key)
+
+    for sv, ips_keys in ips_caps.items():
+        pf_keys = pf_caps.get(sv)
+        if len(ips_keys) == 1 and pf_keys and len(pf_keys) == 1:
+            ips_key, pf_key = ips_keys[0], pf_keys[0]
+            devices = result.ips_only.pop(ips_key)
+            ref = pf_by_key[pf_key][0]
+            result.matched.append(MatchedElement(ips_key, ref, devices, TIER_CAP_BANK_SOLE))
+            claimed.add(ref.key)

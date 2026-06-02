@@ -12,6 +12,8 @@ from mapping.reconciliation import (
     TIER_EXACT,
     TIER_LV_WINDING,
     reconcile,
+    TIER_CAP_BANK,
+    TIER_CAP_BANK_SOLE,
 )
 
 
@@ -179,3 +181,22 @@ def test_substation_filter_can_be_disabled():
     rec = reconcile(ips, pf, ignore_substations_absent_from_pf=False)
     assert rec.ips_only_keys == 1
     assert rec.ignored_keys == 0
+
+def test_cap_bank_bare_to_voltage_digit():
+    ik, pk = MappingKey("ABM", 33, "CP1"), MappingKey("ABM", 33, "CP31")
+    rec = reconcile({ik: [_dev("S1", ik, IpsElementType.CAPACITOR_BANK)]},
+                    PfSourceResult(refs=[_ref(pk, pn.CAT_CAP_BANK)]))
+    assert rec.matched_keys == 1 and rec.matched[0].tier == TIER_CAP_BANK
+
+def test_cap_bank_sole_device_last_resort():
+    ik, pk = MappingKey("ABM", 11, "CP2"), MappingKey("ABM", 11, "CP19")
+    rec = reconcile({ik: [_dev("S1", ik, IpsElementType.CAPACITOR_BANK)]},
+                    PfSourceResult(refs=[_ref(pk, pn.CAT_CAP_BANK)]))
+    assert rec.matched_keys == 1 and rec.matched[0].tier == TIER_CAP_BANK_SOLE
+
+def test_cap_bank_sole_device_requires_one_each_side():
+    ik = MappingKey("ABM", 11, "CP2")
+    pf = PfSourceResult(refs=[_ref(MappingKey("ABM", 11, "CP15"), pn.CAT_CAP_BANK),
+                              _ref(MappingKey("ABM", 11, "CP16"), pn.CAT_CAP_BANK)])
+    rec = reconcile({ik: [_dev("S1", ik, IpsElementType.CAPACITOR_BANK)]}, pf)
+    assert rec.matched_keys == 0 and rec.ips_only_keys == 1 and rec.pf_only_count == 2

@@ -15,6 +15,19 @@ from dataclasses import dataclass
 # Neither side may contain an underscore. A dash is an ordinary character here.
 _PATTERN = re.compile(r"([^_]+)_([^_]+)")
 
+_STRUCTURED = re.compile(r"^(CB|AB|IS)")
+_TFMR_SWITCH_CODE = re.compile(r"^CB\dT\d")
+
+def is_structured_switch(name: str) -> bool:
+    """True if `name` is a decodable substation-switch designation (CB/AB/IS
+    prefix). Generic 'Breaker/Switch' and short codes return False."""
+    return bool(_STRUCTURED.match(name))
+
+def is_transformer_switch_code(name: str) -> bool:
+    """True if `name` is a transformer-switch code CB<v>T<n>... — the only form
+    tfmr_names.update_element_names can decode to TR<n>."""
+    return bool(_TFMR_SWITCH_CODE.match(name))
+
 
 @dataclass(frozen=True)
 class ParsedSwitch:

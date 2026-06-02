@@ -1,3 +1,4 @@
+import re
 from process_pf_elements import (
     bus_parser as bp,
     line_parser as lp,
@@ -11,6 +12,8 @@ from importlib import reload
 reload(dc)
 reload(bp)
 reload(ind)
+
+_STRUCTURED_SWITCH = re.compile(r"^(CB|AB|IS)")
 
 def process_elements(app, selected_grid):
 
@@ -148,28 +151,34 @@ def process_elements(app, selected_grid):
     app.PrintPlain("Parsing switches...")
     for switch in switches:
 
-        # Get voltage
+        # ---- Voltage + cubicle from the connected terminal ----------------
         cub_1 = switch.bus1
         cub_2 = switch.bus2
         if cub_1 is not None:
-            nominal_kv = cub_1.cterm
+            nominal_kv = cub_1.cterm.uknom  # was cub_1.cterm (a terminal object)
             cubicle = cub_1
         elif cub_2 is not None:
-            nominal_kv = cub_2.cterm
+            nominal_kv = cub_2.cterm.uknom
             cubicle = cub_2
         else:
             nominal_kv = None
             cubicle = None
 
-        # Get raw name
+        # ---- Raw operating designation ------------------------------------
         parsed_switch = swp.parse_switch(switch.loc_name)
-        if parsed_switch is None:
-            s_raw_name = switch.loc_name
-        else:
-            s_raw_name = parsed_switch.name
+        s_raw_name = parsed_switch.name if parsed_switch is not None else switch.loc_name
 
+        # Strip a trailing "/<n>" duplicate/variant marker before decoding
+        # (CB4452/1 -> CB4452, CB1X11/12 -> CB1X11).
+        s_raw_name = s_raw_name.split("/")[0]
 
-        # Get element type and name
+        # Only structured CB/AB/IS designations decode positionally; generic
+        # ("Breaker/Switch") or short ("MTC") names can't be keyed.
+        if len(s_raw_name) < 4 or not swp.is_structured_switch(s_raw_name):
+            failed_matches.switches.append(switch)
+            continue
+
+        # ---- Decode element type + operating name -------------------------
         if s_raw_name[3] == "C":
             name = "CP" + s_raw_name[5:6]
             el_type = dc.ElementType.CAPACITOR_BANK
@@ -177,54 +186,58 @@ def process_elements(app, selected_grid):
             name = s_raw_name
             el_type = dc.ElementType.GEN_CUBICLE
         elif s_raw_name[3] == "T":
-            name = s_raw_name     # To be populated later
+            # Transformer breaker -> TR<n> later via tn.update_element_names.
+            # Only CB<v>T<n> codes are decodable; others (e.g. IS3T29) are dropped.
+            if not swp.is_transformer_switch_code(s_raw_name):
+                failed_matches.switches.append(switch)
+                continue
+            name = s_raw_name
             el_type = dc.ElementType.TRANSFORMER
         elif "Spare" in s_raw_name or "SPARE" in s_raw_name:
             name = s_raw_name
             el_type = dc.ElementType.SPARE_SWITCH
-        elif s_raw_name[3] == "X" or s_raw_name[1] == "1":
+        elif s_raw_name[3] == "X" or s_raw_name[2] == "1":
+            # (d)=X bus coupler, or any 11 kV ((c)=1) switch -> 11 kV bus coupler.
             name = s_raw_name
             el_type = dc.ElementType.SWITCH
         else:
-            # This is either a feeder of a switch
-            if cub_1 is not None:
-                terminal_i = cub_1.cterm
-                result_i = add_element_by_obj_match(sites, terminal_i)
-            else:
-                result_i = None
-            if cub_2 is not None:
-                terminal_j = cub_2.cterm
-                result_j = add_element_by_obj_match(sites, terminal_j)
-            else:
-                result_j = None
+            # Bus coupler (both terminals on one substation) or a feeder.
+            terminal_i = cub_1.cterm if cub_1 is not None else None
+            terminal_j = cub_2.cterm if cub_2 is not None else None
+            result_i = add_element_by_obj_match(sites, terminal_i)
+            result_j = add_element_by_obj_match(sites, terminal_j)
 
-            # If both terminals match buses belonging to a single substation, this switch is a bus coupler.
             if result_i is not None and result_j is not None and result_j[0] == result_i[0]:
                 name = s_raw_name
                 el_type = dc.ElementType.SWITCH
-            # If a terminal matches any bus belonging to a substation,
-            # add the line to that substation as a feeder element.
-            else:
-                name = "F" + s_raw_name[2:-1]
+            elif s_raw_name[2] in ("3", "4", "5", "6", "7", "8"):
+                core = s_raw_name[2:]
+                if core.endswith("2"):  # trailing (f) constant -> strip
+                    core = core[:-1]
+                if not core.isdigit():  # a feeder number is numeric
+                    failed_matches.switches.append(switch)
+                    continue
+                name = "F" + core
                 el_type = dc.ElementType.FEEDER
+            else:
+                failed_matches.switches.append(switch)
+                continue
 
-        # Build element
+        # ---- Build + assign to a site -------------------------------------
         new_element = dc.Element(
             name=name,
             obj=switch,
             element_type=el_type,
-            relay_cubicle=dc.RelayCubicle(cubicle, None)
+            relay_cubicle=dc.RelayCubicle(cubicle, None),
         )
 
-        # Assign element to a site
         if parsed_switch is not None:
-            new_site = parsed_switch.substation
-            site = check_new_site(sites, new_site)
+            site = check_new_site(sites, parsed_switch.substation)
             add_element(site, nominal_kv, new_element)
         else:
             cub = switch.bus1
             if cub is not None:
-                result = add_element_by_obj_match(sites, switch.bus1.cterm)
+                result = add_element_by_obj_match(sites, cub.cterm)
                 if result is not None:
                     result[1].add(new_element)
                 else:

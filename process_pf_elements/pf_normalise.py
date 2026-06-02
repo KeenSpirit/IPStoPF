@@ -39,7 +39,8 @@ CAT_BUSBAR = "busbar"
 CAT_CAP_BANK = "cap_bank"
 CAT_SWITCH = "switch"            # bus coupler / line switch
 CAT_FEEDER = "feeder"
-CAT_TRANSFORMER = "transformer"  # HV / MV / LV winding bay
+CAT_TRANSFORMER = "transformer"
+GEN_CUBICLE = "gen_cubicle"
 
 
 # =============================================================================
