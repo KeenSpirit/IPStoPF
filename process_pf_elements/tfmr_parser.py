@@ -25,3 +25,15 @@ def parse_tfmr(s: str) -> ParsedTfmr | None:
         return None
     substation, name = m.groups()
     return ParsedTfmr(source=s, substation=substation, name=name)
+
+
+"""
+transformer name matching:
+
+If there is an IPS location name of the format "NX(a)" or "NX(a)(b)" and with voltage (c) and at site (d), where a and b are numerics, these setting IDs should 
+be matched to any PowerFactory transformer element at voltage (c) and site (d) and with a transformer number (ie n in TRn) that matches (a) or (a)(b) respectively:
+Example
+IPS name is NX5 at voltage 11kV
+This should be match to PowerFactory element TR5 at voltage 11kV
+
+"""
