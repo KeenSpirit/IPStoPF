@@ -10,6 +10,9 @@ from mapping import reconciliation as recon, pf_source
 from process_ips import ips_ingest as ii
 from mapping.report import write_reconciliation_report
 from config import paths
+from ips_data import sbtrans_settings as ss
+from update_powerfactory.orchestrator import update_pf
+from core import UpdateResult
 
 from importlib import reload
 
@@ -40,6 +43,14 @@ def run_main():
     app.PrintPlain(result.coverage_summary())
     report_path = write_reconciliation_report(result, paths.get_output_directory())
     app.PrintPlain(f"Reconciliation report written to: {report_path}")
+
+    # --- apply matched settings to PowerFactory ---------------------------
+    set_ids, device_list = ss.build_devices_from_reconciliation(app, result)
+    app.PrintPlain(f"Built {len(device_list)} devices from {len(set_ids)} setting IDs")
+
+    data_capture_list: list[UpdateResult] = []
+    results, has_updates = update_pf(app, device_list, data_capture_list)
+    app.PrintPlain(f"PowerFactory updated (has_updates={has_updates})")
 
     # Restore the echo
     echo(app, off=False)
