@@ -4,7 +4,7 @@
 
 import time
 import powerfactory as pf
-from user_interface import user_input as ui, obtain_all_grids as oag
+from ui import user_input as ui, obtain_all_grids as oag
 from process_pf_elements import process_elements as pe
 from mapping import reconciliation as recon, pf_source
 from process_ips import ips_ingest as ii
