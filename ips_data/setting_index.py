@@ -15,7 +15,7 @@ from collections import defaultdict
 from typing import Dict, List, Optional, Any
 
 from core import SettingRecord
-from config.relay_patterns import EXCLUDED_PATTERNS
+from update_powerfactory.mapping_file import is_excluded_pattern
 from config.region_config import get_substation_mapping, SUFFIX_EXPANSIONS
 
 
@@ -109,10 +109,9 @@ class SettingIndex:
         if not record.patternname:
             return False
 
-        # Check for excluded pattern substrings
-        for excluded in EXCLUDED_PATTERNS:
-            if excluded in record.patternname:
-                return True
+        # Patterns flagged for exclusion in type_mapping.csv (column B)
+        if is_excluded_pattern(record.patternname):
+            return True
 
         # Ergon: skip inactive records
         if self.region == "Ergon" and record.active is False:

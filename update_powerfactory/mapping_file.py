@@ -25,7 +25,7 @@ File Locations:
 
 import csv
 import os
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Set, Tuple, Any
 
 # Import paths from config
 from config.paths import (
@@ -42,6 +42,11 @@ from config.paths import (
 
 # Type mapping cache: {pattern_name: (mapping_filename, relay_type)}
 _type_mapping_cache: Optional[Dict[str, Tuple[str, str]]] = None
+
+# Excluded patterns cache: set of IPS pattern names flagged for exclusion
+# (column B == "Yes") in type_mapping.csv. Populated as a side-effect of
+# _load_type_mapping() so the file is only read once.
+_excluded_patterns_cache: Optional[Set[str]] = None
 
 # Individual mapping file cache: {filename: list_of_rows}
 _mapping_file_cache: Dict[str, List[List[str]]] = {}
@@ -72,7 +77,9 @@ def clear_cache() -> None:
     and you need to reload them.
     """
     global _type_mapping_cache, _mapping_file_cache, _curve_mapping_cache
+    global _excluded_patterns_cache
     _type_mapping_cache = None
+    _excluded_patterns_cache = None
     _mapping_file_cache.clear()
     _curve_mapping_cache = None
 
@@ -87,6 +94,11 @@ def get_cache_stats() -> Dict[str, Any]:
     return {
         **_cache_stats,
         "type_mapping_loaded": _type_mapping_cache is not None,
+        "excluded_patterns_count": (
+            len(_excluded_patterns_cache)
+            if _excluded_patterns_cache is not None
+            else 0
+        ),
         "mapping_files_cached": len(_mapping_file_cache),
         "curve_mapping_loaded": _curve_mapping_cache is not None,
     }
@@ -109,17 +121,58 @@ def preload_cache() -> None:
 # Type Mapping (pattern -> mapping file + relay type)
 # =============================================================================
 
+def _read_mapping_csv_lines(filepath: str) -> List[str]:
+    """
+    Read a mapping CSV file as a list of lines, tolerating encoding.
+
+    type_mapping.csv can contain non-ASCII characters (e.g. the degree sign
+    in some pattern names). Files exported from Excel on Windows are commonly
+    saved as CP1252 rather than UTF-8, so fall back to CP1252 if UTF-8
+    decoding fails. Without this, a single non-ASCII character would raise
+    UnicodeDecodeError and cause the entire mapping to load as empty.
+
+    Args:
+        filepath: Path to the CSV file
+
+    Returns:
+        List of text lines (newline characters stripped)
+
+    Raises:
+        FileNotFoundError, PermissionError, OSError: propagated to the caller
+    """
+    try:
+        with open(filepath, "r", encoding="utf-8", newline="") as f:
+            return f.read().splitlines()
+    except UnicodeDecodeError:
+        with open(filepath, "r", encoding="cp1252", newline="") as f:
+            return f.read().splitlines()
+
+
 def _load_type_mapping() -> Dict[str, Tuple[str, str]]:
     """
     Load and cache the type mapping from type_mapping.csv.
 
-    The type mapping file has the format:
-        pattern_name,mapping_filename,relay_type
+    The type mapping file has the following column layout (1-indexed):
+        A: IPS pattern name
+        B: Exclude flag ("Yes"/"No", case-insensitive)
+        C: CT secondary (not used here)
+        D: Mapping file name
+        E: PowerFactory relay model (relay type)
+        F-G: Notes (not used here)
+
+    A single pass populates two caches:
+        _type_mapping_cache:      {pattern_name: (mapping_filename, relay_type)}
+        _excluded_patterns_cache: {pattern_name, ...} for every row whose
+                                  Exclude flag (column B) is "Yes".
+
+    The excluded set replaces the former EXCLUDED_PATTERNS constant: column B
+    of type_mapping.csv is now the single source of truth for which patterns
+    are filtered out during lookups (see is_excluded_pattern).
 
     Returns:
         Dictionary mapping pattern names to (mapping_filename, relay_type) tuples
     """
-    global _type_mapping_cache, _cache_stats
+    global _type_mapping_cache, _excluded_patterns_cache, _cache_stats
 
     if _type_mapping_cache is not None:
         _cache_stats["type_mapping_hits"] += 1
@@ -127,24 +180,70 @@ def _load_type_mapping() -> Dict[str, Tuple[str, str]]:
 
     _cache_stats["type_mapping_misses"] += 1
     _type_mapping_cache = {}
+    _excluded_patterns_cache = set()
 
     filepath = get_type_mapping_file()
 
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            for row in f.readlines():
-                line = row.strip().split(",")
-                if len(line) >= 3:
-                    pattern_name = line[0]
-                    mapping_filename = line[1]
-                    relay_type = line[2]
-                    _type_mapping_cache[pattern_name] = (mapping_filename, relay_type)
+        lines = _read_mapping_csv_lines(filepath)
     except FileNotFoundError:
-        pass  # Return empty cache if file not found
-    except (PermissionError, UnicodeDecodeError, OSError):
-        pass  # File access or encoding issues - return empty cache
+        return _type_mapping_cache  # Return empty caches if file not found
+    except (PermissionError, OSError):
+        return _type_mapping_cache  # File access issues - return empty caches
+
+    try:
+        for line in csv.reader(lines):
+            # Need at least up to the PF_MODEL column (index 4)
+            if len(line) < 5:
+                continue
+
+            pattern_name = line[0].strip()
+
+            # Skip the header row and blank pattern names
+            if not pattern_name or pattern_name == "IPS":
+                continue
+
+            exclude_flag = line[1].strip().lower()
+            mapping_filename = line[3].strip()
+            relay_type = line[4].strip()
+
+            _type_mapping_cache[pattern_name] = (mapping_filename, relay_type)
+
+            # Column B is the source of truth for exclusion (case-insensitive)
+            if exclude_flag == "yes":
+                _excluded_patterns_cache.add(pattern_name)
+    except csv.Error:
+        pass  # Malformed CSV - keep whatever was parsed so far
 
     return _type_mapping_cache
+
+
+def is_excluded_pattern(pattern_name: str) -> bool:
+    """
+    Check if a pattern should be excluded from processing.
+
+    A pattern is excluded when it is flagged "Yes" in column B (Exclude) of
+    type_mapping.csv. Matching is a substring check (an excluded pattern name
+    appearing within the supplied pattern name), preserving the behaviour of
+    the former EXCLUDED_PATTERNS-based filter.
+
+    Args:
+        pattern_name: The IPS relay pattern name
+
+    Returns:
+        True if the pattern should be excluded
+    """
+    if not pattern_name:
+        return False
+
+    # Ensure the excluded set is populated (loaded once, then cached)
+    _load_type_mapping()
+
+    for excluded in (_excluded_patterns_cache or set()):
+        if excluded in pattern_name:
+            return True
+
+    return False
 
 
 def get_type_mapping(pattern_name: str) -> Optional[Tuple[str, str]]:

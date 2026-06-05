@@ -66,7 +66,6 @@ from config.relay_patterns import (
     SINGLE_PHASE_RELAYS,
     MULTI_PHASE_RELAYS,
     RELAYS_OOS,
-    EXCLUDED_PATTERNS,
 )
 
 from config.region_config import (
@@ -128,7 +127,6 @@ __all__ = [
     "SINGLE_PHASE_RELAYS",
     "MULTI_PHASE_RELAYS",
     "RELAYS_OOS",
-    "EXCLUDED_PATTERNS",
     # Region config
     "get_substation_mapping",
     "SUFFIX_EXPANSIONS",

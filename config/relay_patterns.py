@@ -7,8 +7,13 @@ identify patterns that should be excluded or handled specially.
 
 These constants are used by:
 - relay_settings.py: To determine phase configuration
-- setting_index.py: To filter excluded patterns
 - update_powerfactory.py: To identify relays to set out of service
+
+Note:
+    Pattern exclusion is no longer handled here. Patterns to filter out
+    during lookups are now defined by column B ("Exclude") of
+    type_mapping.csv and resolved via
+    update_powerfactory.mapping_file.is_excluded_pattern.
 
 Maintenance Notes:
     These lists must be kept up to date as new relay patterns are
@@ -16,7 +21,7 @@ Maintenance Notes:
     determine its characteristics and add it to the appropriate list.
 """
 
-from typing import Set, List, FrozenSet
+from typing import List
 
 
 # =============================================================================
@@ -58,27 +63,6 @@ RELAYS_OOS: List[str] = [
     "SOLKOR-N_Energex",
     "SOLKOR-RF_Energex",
 ]
-
-
-# =============================================================================
-# Excluded Patterns
-# =============================================================================
-
-# IPS relay patterns that have no protection settings and should be
-# filtered out during lookups. These patterns exist in IPS but don't
-# contain configurable protection settings.
-EXCLUDED_PATTERNS: FrozenSet[str] = frozenset({
-    "RTU",
-    "CMGR12",
-    "SEL2505_Energex",
-    "GenericRelayWithoutSetting_Energex",
-    "SEL-2505",
-    "GenericRelayWithoutSetting",
-    "T> in TMS no Current_Energex",
-    "I>> 3Ph no Time I>> in A_Energex",
-    "I> 1Ph no Time I in A_Energex",
-    "I> 1Ph no Time I in %_Energex",
-})
 
 
 # =============================================================================
@@ -141,26 +125,3 @@ def should_set_out_of_service(relay_type: str) -> bool:
         True if the relay should be set out of service
     """
     return relay_type in RELAYS_OOS
-
-
-def is_excluded_pattern(pattern_name: str) -> bool:
-    """
-    Check if a pattern should be excluded from processing.
-
-    This checks if any of the excluded pattern strings appear
-    within the pattern name (substring match).
-
-    Args:
-        pattern_name: The IPS relay pattern name
-
-    Returns:
-        True if the pattern should be excluded
-    """
-    if not pattern_name:
-        return False
-
-    for excluded in EXCLUDED_PATTERNS:
-        if excluded in pattern_name:
-            return True
-
-    return False
