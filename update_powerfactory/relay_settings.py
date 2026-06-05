@@ -103,9 +103,11 @@ def relay_settings(
     result.relay_pattern = device_object.device
     result.used_pattern = device_object.device
 
-    # Load mapping file for this relay pattern
+    # Load mapping file for this relay pattern. CT secondary selects the
+    # correct PowerFactory model for patterns that are CT-dependent.
     mapping_file, mapping_type = mf.read_mapping_file(
-        app, device_object.device, device_object.pf_obj
+        app, device_object.device, device_object.pf_obj,
+        device_object.ct_secondary
     )
 
     # Validate and update relay type if needed

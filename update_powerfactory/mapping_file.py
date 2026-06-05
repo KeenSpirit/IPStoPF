@@ -40,8 +40,13 @@ from config.paths import (
 # Cache Storage
 # =============================================================================
 
-# Type mapping cache: {pattern_name: (mapping_filename, relay_type)}
-_type_mapping_cache: Optional[Dict[str, Tuple[str, str]]] = None
+# Type mapping cache.
+# Each pattern maps to a dict of CT-secondary variants:
+#   {pattern_name: {ct_key: (mapping_filename, relay_type)}}
+# ct_key is None for patterns whose mapping does not depend on CT secondary
+# (column C blank), or the normalised CT secondary (e.g. "1", "5") for
+# CT-dependent patterns that have a separate row per secondary current.
+_type_mapping_cache: Optional[Dict[str, Dict[Optional[str], Tuple[str, str]]]] = None
 
 # Excluded patterns cache: set of IPS pattern names flagged for exclusion
 # (column B == "Yes") in type_mapping.csv. Populated as a side-effect of
@@ -148,29 +153,66 @@ def _read_mapping_csv_lines(filepath: str) -> List[str]:
             return f.read().splitlines()
 
 
-def _load_type_mapping() -> Dict[str, Tuple[str, str]]:
+def _normalise_ct_key(value: Any) -> Optional[str]:
+    """
+    Normalise a CT secondary value into a cache/lookup key.
+
+    Accepts the CT Sec cell from type_mapping.csv (e.g. "", "1", "5") or a
+    device's ct_secondary (e.g. 1, 5, 5.0, "5"). Blank/None values normalise
+    to None, meaning "not CT dependent". Numeric values normalise to their
+    integer string form so that "5", "5.0" and 5 all match.
+
+    Args:
+        value: The raw CT secondary value
+
+    Returns:
+        Normalised key string, or None if the value is blank
+    """
+    if value is None:
+        return None
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    try:
+        return str(int(float(text)))
+    except (ValueError, TypeError):
+        return text
+
+
+def _load_type_mapping() -> Dict[str, Dict[Optional[str], Tuple[str, str]]]:
     """
     Load and cache the type mapping from type_mapping.csv.
 
     The type mapping file has the following column layout (1-indexed):
         A: IPS pattern name
         B: Exclude flag ("Yes"/"No", case-insensitive)
-        C: CT secondary (not used here)
+        C: CT secondary (blank, or e.g. "1"/"5" for CT-dependent patterns)
         D: Mapping file name
         E: PowerFactory relay model (relay type)
         F-G: Notes (not used here)
 
+    Some patterns map to different PowerFactory models depending on the
+    secondary current of the associated CT. These patterns appear on more
+    than one row, distinguished by the CT Sec value in column C (for example
+    SEL311C_Energex -> "SEL 311C-1A" for a 1 A CT and "SEL 311C-5A" for 5 A).
+    Patterns whose mapping does not depend on the CT secondary have a blank
+    column C and a single row.
+
     A single pass populates two caches:
-        _type_mapping_cache:      {pattern_name: (mapping_filename, relay_type)}
+        _type_mapping_cache:      {pattern_name: {ct_key: (mapping_filename,
+                                  relay_type)}} where ct_key is None for
+                                  non-CT-dependent patterns.
         _excluded_patterns_cache: {pattern_name, ...} for every row whose
                                   Exclude flag (column B) is "Yes".
 
     The excluded set replaces the former EXCLUDED_PATTERNS constant: column B
-    of type_mapping.csv is now the single source of truth for which patterns
-    are filtered out during lookups (see is_excluded_pattern).
+    of type_mapping.csv is the single source of truth for which patterns are
+    filtered out during lookups (see is_excluded_pattern).
 
     Returns:
-        Dictionary mapping pattern names to (mapping_filename, relay_type) tuples
+        Dictionary mapping pattern names to their CT-secondary variants.
     """
     global _type_mapping_cache, _excluded_patterns_cache, _cache_stats
 
@@ -204,10 +246,21 @@ def _load_type_mapping() -> Dict[str, Tuple[str, str]]:
                 continue
 
             exclude_flag = line[1].strip().lower()
+            ct_key = _normalise_ct_key(line[2])  # Column C: CT secondary
             mapping_filename = line[3].strip()
             relay_type = line[4].strip()
 
-            _type_mapping_cache[pattern_name] = (mapping_filename, relay_type)
+            variants = _type_mapping_cache.setdefault(pattern_name, {})
+
+            # Don't let a blank/empty duplicate row overwrite a populated one.
+            # (Otherwise last-wins could replace a real mapping with an empty
+            # row that shares the same pattern name and CT key.)
+            existing = variants.get(ct_key)
+            new_is_empty = not mapping_filename and not relay_type
+            if existing is not None and new_is_empty:
+                pass  # keep the existing populated variant
+            else:
+                variants[ct_key] = (mapping_filename, relay_type)
 
             # Column B is the source of truth for exclusion (case-insensitive)
             if exclude_flag == "yes":
@@ -216,6 +269,56 @@ def _load_type_mapping() -> Dict[str, Tuple[str, str]]:
         pass  # Malformed CSV - keep whatever was parsed so far
 
     return _type_mapping_cache
+
+
+def _select_type_variant(
+    variants: Dict[Optional[str], Tuple[str, str]],
+    ct_secondary: Any = None
+) -> Optional[Tuple[str, str]]:
+    """
+    Pick the appropriate (mapping_filename, relay_type) variant for a pattern.
+
+    Selection rules:
+    - Non-CT-dependent pattern (only a None-keyed variant): return it,
+      regardless of ct_secondary.
+    - CT-dependent pattern: return the variant matching the supplied CT
+      secondary. If no CT secondary is given or it doesn't match a known
+      variant, fall back deterministically to a non-CT-dependent variant if
+      present, then to the 1 A variant, then to the lowest available key.
+
+    Args:
+        variants: Mapping of ct_key -> (mapping_filename, relay_type)
+        ct_secondary: The device's CT secondary current (e.g. 1 or 5)
+
+    Returns:
+        The selected (mapping_filename, relay_type) tuple, or None if empty.
+    """
+    if not variants:
+        return None
+
+    # Non-CT-dependent: a single variant stored under the None key.
+    if len(variants) == 1 and None in variants:
+        return variants[None]
+
+    # CT-dependent: try to match the device's CT secondary.
+    key = _normalise_ct_key(ct_secondary)
+    if key is not None and key in variants:
+        return variants[key]
+
+    # Fallbacks when the CT secondary is unknown or unmatched.
+    if None in variants:
+        return variants[None]
+    if "1" in variants:
+        return variants["1"]
+
+    # Deterministic last resort: numeric keys first (ascending), then any.
+    def _sort_key(k: Optional[str]):
+        if k is None:
+            return (2, "")
+        return (0, int(k)) if k.isdigit() else (1, k)
+
+    first_key = sorted(variants.keys(), key=_sort_key)[0]
+    return variants[first_key]
 
 
 def is_excluded_pattern(pattern_name: str) -> bool:
@@ -246,18 +349,31 @@ def is_excluded_pattern(pattern_name: str) -> bool:
     return False
 
 
-def get_type_mapping(pattern_name: str) -> Optional[Tuple[str, str]]:
+def get_type_mapping(
+    pattern_name: str,
+    ct_secondary: Any = None
+) -> Optional[Tuple[str, str]]:
     """
     Get the mapping file name and relay type for a pattern.
 
+    For patterns whose PowerFactory model depends on the CT secondary current
+    (e.g. SEL311C_Energex), pass the device's ct_secondary so the correct
+    variant is selected. For patterns that are not CT dependent, ct_secondary
+    is ignored.
+
     Args:
         pattern_name: The IPS relay pattern name
+        ct_secondary: The associated CT secondary current (e.g. 1 or 5).
+            Optional; defaults to None (selects the non-CT-dependent variant,
+            falling back deterministically for CT-dependent patterns).
 
     Returns:
         Tuple of (mapping_filename, relay_type) or None if not found
     """
-    type_mapping = _load_type_mapping()
-    return type_mapping.get(pattern_name)
+    variants = _load_type_mapping().get(pattern_name)
+    if not variants:
+        return None
+    return _select_type_variant(variants, ct_secondary)
 
 
 # =============================================================================
@@ -446,24 +562,29 @@ def get_pf_curve(app, setting_value: str, element) -> Any:
 def read_mapping_file(
     app,
     rel_pattern: str,
-    pf_device
+    pf_device,
+    ct_secondary: Any = None
 ) -> Tuple[Optional[List[List[str]]], Optional[str]]:
     """
     Read the mapping file for a relay pattern.
 
     Looks up the relay pattern in the type mapping, then loads and
-    processes the corresponding mapping file.
+    processes the corresponding mapping file. When a pattern maps to
+    different PowerFactory models depending on the CT secondary current,
+    ct_secondary selects the correct variant.
 
     Args:
         app: PowerFactory application object
         rel_pattern: The IPS relay pattern name
         pf_device: The PowerFactory device object (for name substitution)
+        ct_secondary: The device's CT secondary current (e.g. 1 or 5), used
+            to disambiguate CT-dependent patterns. Optional.
 
     Returns:
         Tuple of (mapping_file_rows, relay_type) or (None, None) if not found
     """
-    # Look up pattern in type mapping (cached)
-    type_info = get_type_mapping(rel_pattern)
+    # Look up pattern in type mapping (cached), selecting the CT variant
+    type_info = get_type_mapping(rel_pattern, ct_secondary)
 
     if not type_info:
         return None, None
@@ -537,17 +658,22 @@ def is_pattern_mapped(pattern_name: str) -> bool:
     return get_type_mapping(pattern_name) is not None
 
 
-def get_relay_type_for_pattern(pattern_name: str) -> Optional[str]:
+def get_relay_type_for_pattern(
+    pattern_name: str,
+    ct_secondary: Any = None
+) -> Optional[str]:
     """
     Get the PowerFactory relay type name for a pattern.
 
     Args:
         pattern_name: The IPS relay pattern name
+        ct_secondary: The associated CT secondary current, used to select the
+            correct variant for CT-dependent patterns. Optional.
 
     Returns:
         The relay type name, or None if pattern not mapped
     """
-    type_info = get_type_mapping(pattern_name)
+    type_info = get_type_mapping(pattern_name, ct_secondary)
     if type_info:
         return type_info[1]  # relay_type is second element
     return None

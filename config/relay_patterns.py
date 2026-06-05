@@ -56,13 +56,12 @@ MULTI_PHASE_RELAYS: List[str] = [
 # Relay types that should be set out of service in PowerFactory.
 # These are feeder disconnect relays that do not have TOC protection
 # settings in IPS.
-RELAYS_OOS: List[str] = [
-    "7PG21 (SOLKOR-RF)",
-    "7SG18 (SOLKOR-N)",
-    "RED615 2.6 - 2.8",
-    "SOLKOR-N_Energex",
-    "SOLKOR-RF_Energex",
-]
+RELAYS_OOS: List[str] = []
+    # "7PG21 (SOLKOR-RF)",
+    # "7SG18 (SOLKOR-N)",
+    # "RED615 2.6 - 2.8",
+    # "SOLKOR-N_Energex",
+    # "SOLKOR-RF_Energex",
 
 
 # =============================================================================
