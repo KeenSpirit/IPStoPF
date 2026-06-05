@@ -71,6 +71,20 @@ _COL_DEVICE_ID = 4
 _COL_ASSET = 5
 _COL_PATH = 6
 
+# Database/report field names for each column, in column order. Used to adapt
+# the dict rows returned by the IPS query layer (production) to the positional
+# row layout above (the same layout the offline CSV export produced). The names
+# mirror the Report-Cache-ProtectionSettingIDs-EX report columns.
+_DB_FIELDS_BY_COL = (
+    "patternname",       # _COL_PATTERN (0)
+    "nameenu",           # B - unused by ingest, retained for parity
+    "relaysettingid",    # _COL_SETTING_ID (2)
+    "datesetting",       # _COL_DATE (3)
+    "deviceid",          # _COL_DEVICE_ID (4)
+    "assetname",         # _COL_ASSET (5)
+    "locationpathenu",   # _COL_PATH (6)
+)
+
 
 # =============================================================================
 # Scope constants
@@ -386,3 +400,42 @@ def ingest_ips_export(csv_path: str,
         reader = csv.reader(f)
         next(reader, None)  # skip header
         return ingest_rows(reader, mapping=mapping)
+
+
+# =============================================================================
+# Database-backed ingest (production)
+# =============================================================================
+
+def _record_to_row(record: dict) -> List[str]:
+    """Adapt a single IPS setting-ID dict (as returned by the query layer) to
+    the positional row layout consumed by :func:`ingest_rows`.
+
+    The query layer yields one dict per setting whose keys mirror the
+    Report-Cache-ProtectionSettingIDs-EX report columns. Missing keys default
+    to an empty string so a sparse row never raises; ``ingest_rows`` then
+    applies the usual parse/scope rules. Values are coerced to ``str`` because
+    the offline CSV path delivered every field as text and the downstream
+    parsing (voltage/designation normalisation, path splitting) expects strings.
+    """
+    return [str(record.get(field, "") or "") for field in _DB_FIELDS_BY_COL]
+
+
+def ingest_ips_records(records: Iterable[dict],
+                       mapping: Optional[dict] = None) -> IpsIngestResult:
+    """Ingest IPS setting-ID rows obtained from the database query layer.
+
+    This is the production counterpart to :func:`ingest_ips_export`. Instead of
+    reading the Report-Cache-ProtectionSettingIDs-EX CSV from disk, it consumes
+    the dict rows returned by ``ips_data.query_database.get_setting_id_records``
+    (the corporate-cache query). Each dict is adapted to the positional layout
+    and handed to the shared :func:`ingest_rows`, so the parse, scope and
+    mapping logic is identical to the offline path - only the source differs.
+
+    Args:
+        records: Iterable of setting-ID dicts (one per protection-device
+                 setting), keyed by the report column names.
+        mapping:  Substation mapping override (defaults to
+                  ``config.region_config.get_substation_mapping``).
+    """
+    rows = (_record_to_row(record) for record in records)
+    return ingest_rows(rows, mapping=mapping)

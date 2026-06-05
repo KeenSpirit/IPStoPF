@@ -34,6 +34,9 @@ logger = get_logger(__name__)
 # Cache for setting indexes to avoid rebuilding on repeated calls
 _index_cache: Dict[str, SettingIndex] = {}
 
+# Cache for raw setting-ID rows to avoid re-querying on repeated calls
+_rows_cache: Dict[str, List[Dict]] = {}
+
 
 def get_setting_ids(app, region: str) -> SettingIndex:
     """
@@ -69,6 +72,46 @@ def get_setting_ids(app, region: str) -> SettingIndex:
     _index_cache[cache_key] = index
 
     return index
+
+
+def get_setting_id_records(app, region: str) -> List[Dict]:
+    """
+    Retrieve the raw protection-device setting-ID rows for a region.
+
+    This is the subtransmission analogue of :func:`get_setting_ids`. Where
+    :func:`get_setting_ids` builds a :class:`SettingIndex` for switch-name
+    matching (the distribution flow), the subtransmission pipeline matches on
+    the canonical ``MappingKey`` parsed from each row's location path, so it
+    needs the rows themselves rather than the index.
+
+    The rows are sourced from the corporate cache (the same
+    ``Report-Cache-ProtectionSettingIDs-EX`` / ``-EE`` report that
+    :func:`get_setting_ids` consumes) with the existing retry logic, and are
+    cached to avoid re-querying on repeated calls. Each row is a dict whose
+    keys mirror the report columns (``patternname``, ``nameenu``,
+    ``relaysettingid``, ``datesetting``, ``deviceid``, ``assetname``,
+    ``locationpathenu``) - i.e. the same content the offline CSV export
+    provided to ``process_ips.ingest_ips_export``.
+
+    Args:
+        app: PowerFactory application object
+        region: "Energex" or "Ergon"
+
+    Returns:
+        List of setting-ID dictionaries (one per protection-device setting).
+
+    Raises:
+        SystemExit: If unable to retrieve data after multiple attempts.
+    """
+    cache_key = f"setting_id_rows_{region}"
+    if cache_key in _rows_cache:
+        return _rows_cache[cache_key]
+
+    rows = _fetch_setting_ids_with_retry(app, region)
+
+    _rows_cache[cache_key] = rows
+
+    return rows
 
 
 def _fetch_setting_ids_with_retry(app, region: str, max_attempts: int = 5) -> List[Dict]:

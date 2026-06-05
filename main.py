@@ -11,6 +11,7 @@ from process_ips import ips_ingest as ii
 from mapping.report import write_reconciliation_report
 from config import paths
 from ips_data import sbtrans_settings as ss
+from ips_data import query_database as qd
 from update_powerfactory.orchestrator import update_pf
 from core import UpdateResult
 
@@ -30,8 +31,13 @@ def run_main():
     # Turn the echo off (suppress output window messages)
     echo(app)
 
-    ips_export = paths.get_ips_data()
-    ips = ii.ingest_ips_export(str(ips_export))
+    # Obtain the IPS setting-ID data from the database (corporate cache query).
+    # In development this report was read from the Report-Cache-
+    # ProtectionSettingIDs-EX CSV via paths.get_ips_data(); in production it is
+    # sourced through the same query layer used for the detailed and CT/VT
+    # settings below. Subtransmission is an Energex (EX) dataset.
+    ips_records = qd.get_setting_id_records(app, ss.REGION)
+    ips = ii.ingest_ips_records(ips_records)
 
     exg_grids_sorted = oag.all_egx_grids(app)
     # selected_grid = ui.select_object(exg_grids_sorted)
