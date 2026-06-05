@@ -40,10 +40,9 @@ def run_main():
     ips = ii.ingest_ips_records(ips_records)
 
     exg_grids_sorted = oag.all_egx_grids(app)
-    # selected_grid = ui.select_object(exg_grids_sorted)
+    selected_grid = ui.select_object(exg_grids_sorted)
     sites = []
-    for selected_grid in exg_grids_sorted:
-        sites.extend(pe.process_elements(app, selected_grid))
+    sites.extend(pe.process_elements(app, selected_grid))
     pf_result = pf_source.pf_refs_from_sites(sites)
     result = recon.reconcile(ips.by_key, pf_result)
     app.PrintPlain(result.coverage_summary())

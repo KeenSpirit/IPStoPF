@@ -46,7 +46,7 @@ def ee_device_list(
 
     for i, device_name in enumerate(selections):
         if i % 10 == 0:
-            app.PrintInfo(f"IPS is being checked for device {i} of {len(selections)}")
+            app.PrintPlain(f"IPS is being checked for device {i} of {len(selections)}")
 
         plant_number = get_plant_number(device_name)
         pf_device = device_dict[device_name][0]
@@ -115,7 +115,7 @@ def ergon_all_dev_list(
 
     for i, pf_device in enumerate(prot_devices):
         if i % 10 == 0:
-            app.PrintInfo(f"IPS is being checked for device {i} of {len(prot_devices)}")
+            app.PrintPlain(f"IPS is being checked for device {i} of {len(prot_devices)}")
 
         # Delete duplicate devices (names ending with parentheses)
         if pf_device.loc_name.endswith(")"):

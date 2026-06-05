@@ -54,7 +54,7 @@ def update_pf(
         return _convert_results_to_dicts(data_capture_list), False
 
     # Build type indexes once for O(1) lookups
-    app.PrintInfo("Creating indexed database of PowerFactory Fuse and Relay Types")
+    app.PrintPlain("Creating indexed database of PowerFactory Fuse and Relay Types")
     relay_index = RelayTypeIndex.build(app)
     fuse_index = FuseTypeIndex.build(app)
 
@@ -68,7 +68,7 @@ def update_pf(
         for i, device_object in enumerate(lst_of_devs):
             # Progress reporting
             if i % 10 == 0:
-                app.PrintInfo(f"Device {i} of {len(lst_of_devs)} is being updated")
+                app.PrintPlain(f"Device {i} of {len(lst_of_devs)} is being updated")
 
             # Skip devices without PowerFactory object
             if not device_object.pf_obj:

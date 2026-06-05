@@ -71,7 +71,7 @@ def build_devices_from_reconciliation(
     # Single batched fetch of detailed settings + instrument-transformer rows,
     # mirroring ips_data.ips_settings.get_ips_settings (batch path).
     if setting_ids:
-        app.PrintInfo(f"Fetching IPS settings for {len(setting_ids)} setting IDs")
+        app.PrintPlain(f"Fetching IPS settings for {len(setting_ids)} setting IDs")
         ips_settings, ips_it_settings = qd.batch_settings(
             app, REGION, called_function=True, set_ids=setting_ids
         )
@@ -98,7 +98,7 @@ def _create_devices(
     total = len(result.matched)
     for i, matched in enumerate(result.matched):
         if i % 10 == 0:
-            app.PrintInfo(f"Building devices for matched element {i} of {total}")
+            app.PrintPlain(f"Building devices for matched element {i} of {total}")
 
         cubicle = matched.pf.cubicle
         if cubicle is None:

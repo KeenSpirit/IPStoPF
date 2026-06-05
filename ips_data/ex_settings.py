@@ -89,7 +89,7 @@ def _get_switches_for_selections(
     
     for i, device in enumerate(selections):
         if i % 10 == 0:
-            app.PrintInfo(f"Finding switch for device {i} of {len(selections)}")
+            app.PrintPlain(f"Finding switch for device {i} of {len(selections)}")
         
         # Extract base device name (before underscore)
         device_name = device.split("_")[0]
@@ -172,7 +172,7 @@ def create_new_devices(
     
     for i, switch in enumerate(switches):
         if i % 10 == 0:
-            app.PrintInfo(f"IPS is being checked for switch {i} of {len(switches)}")
+            app.PrintPlain(f"IPS is being checked for switch {i} of {len(switches)}")
         
         # Skip certain ElmCoup switches
         if not _should_process_switch(switch):

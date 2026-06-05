@@ -116,7 +116,7 @@ def _get_selected_devices(
     if batch or set_ids == "Batch":
         # Batch mode - process all devices
         if region == "Energex":
-            app.PrintInfo("Creating a list of Setting IDs for all Energex devices")
+            app.PrintPlain("Creating a list of Setting IDs for all Energex devices")
             device_list, failed_cbs, set_ids = ex.create_new_devices(
                 app, setting_index, called_function
             )
@@ -124,7 +124,7 @@ def _get_selected_devices(
             # Add relay skeletons for Ergon
             add_protection_relay_skeletons.main(app)
             app.ClearOutputWindow()
-            app.PrintInfo("Creating a list of Setting IDs for all Ergon devices")
+            app.PrintPlain("Creating a list of Setting IDs for all Ergon devices")
             set_ids, device_list, data_capture_list = ee.ergon_all_dev_list(
                 app, data_capture_list, setting_index, called_function
             )
@@ -205,7 +205,7 @@ def _associate_device_settings(
 
     for i, device_object in enumerate(device_list):
         if i % 10 == 0:
-            app.PrintInfo(
+            app.PrintPlain(
                 f"Device {i} of {total} has had its setting attributes assigned"
             )
 
