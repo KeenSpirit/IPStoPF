@@ -44,6 +44,7 @@ def run_main():
     sites = []
     sites.extend(pe.process_elements(app, selected_grid))
     pf_result = pf_source.pf_refs_from_sites(sites)
+    pf_result = ui.select_pf_elements(pf_result)
     result = recon.reconcile(ips.by_key, pf_result)
     app.PrintPlain(result.coverage_summary())
     report_path = write_reconciliation_report(result, paths.get_output_directory())
