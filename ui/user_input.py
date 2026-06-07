@@ -132,18 +132,12 @@ def select_object(objects):
         result["object"] = objects[idx]
         root.destroy()
 
-    def on_back():
-        result["back"] = True
-        root.destroy()
-
     def on_exit():
         root.destroy()
         sys.exit(0)
 
     tk.Button(button_bar, text="Okay", width=12,
-              command=on_okay).pack(side="left", padx=(8, 0))
-    tk.Button(button_bar, text="Back", width=12,
-              command=on_back).pack(side="left", padx=(8, 0))
+              command=on_okay).pack(side="left")
     tk.Button(button_bar, text="Exit Application", width=14,
               command=on_exit).pack(side="left", padx=(8, 0))
 
@@ -451,6 +445,10 @@ def select_pf_elements(pf_result):
         result["refs"] = chosen
         root.destroy()
 
+    def on_back():
+        result["back"] = True
+        root.destroy()
+
     def on_exit():
         root.destroy()
         sys.exit(0)
@@ -459,6 +457,8 @@ def select_pf_elements(pf_result):
               command=on_select_all).pack(side="left")
     tk.Button(button_bar, text="Okay", width=12,
               command=on_okay).pack(side="left", padx=(8, 0))
+    tk.Button(button_bar, text="Back", width=12,
+              command=on_back).pack(side="left", padx=(8, 0))
     tk.Button(button_bar, text="Exit Application", width=14,
               command=on_exit).pack(side="left", padx=(8, 0))
 
