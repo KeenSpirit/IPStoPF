@@ -132,12 +132,18 @@ def select_object(objects):
         result["object"] = objects[idx]
         root.destroy()
 
+    def on_back():
+        result["back"] = True
+        root.destroy()
+
     def on_exit():
         root.destroy()
         sys.exit(0)
 
     tk.Button(button_bar, text="Okay", width=12,
-              command=on_okay).pack(side="left")
+              command=on_okay).pack(side="left", padx=(8, 0))
+    tk.Button(button_bar, text="Back", width=12,
+              command=on_back).pack(side="left", padx=(8, 0))
     tk.Button(button_bar, text="Exit Application", width=14,
               command=on_exit).pack(side="left", padx=(8, 0))
 
@@ -164,6 +170,8 @@ def select_object(objects):
 # Per-element processing budget used for the time estimate (seconds).
 _SECONDS_PER_ELEMENT = 30
 
+# Sentinel returned by select_pf_elements when the user presses "Back".
+GO_BACK = object()
 
 def _fmt_voltage(v) -> str:
     """Render a MappingKey voltage for display ('132 kV', '11 kV', 'LV')."""
@@ -269,7 +277,7 @@ def select_pf_elements(pf_result):
     root = tk.Tk()
     root.title("IPS to PowerFactory - Sub-transmission")
 
-    result = {"refs": None}   # holder so nested callbacks can write back
+    result = {"refs": None, "back": False}   # holder so nested callbacks can write back
 
     # ---- Heading -------------------------------------------------------
     header = tk.Label(
@@ -472,7 +480,9 @@ def select_pf_elements(pf_result):
 
     root.mainloop()
 
-    if result["refs"] is None:        # window closed without Okay
+    if result["back"]:  # user chose Back -> caller re-shows grids
+        return GO_BACK
+    if result["refs"] is None:  # window closed without Okay
         sys.exit(0)
 
     return PfSourceResult(refs=result["refs"],
