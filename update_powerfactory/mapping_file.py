@@ -676,7 +676,7 @@ def get_relay_type_for_pattern(
     Get the PowerFactory relay type name for a pattern.
 
     Args:
-        pattern_name: The IPS relay pattern name
+        pattern_name: The IPS relay pattern name.
         ct_secondary: The associated CT secondary current, used to select the
             correct variant for CT-dependent patterns. Optional.
 

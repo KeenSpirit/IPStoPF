@@ -16,7 +16,7 @@ Sub-modules handle specialized functionality:
 - setting_utils: Shared utility functions
 
 Performance optimizations:
-- Uses RelayTypeIndex for O(1) relay type lookups
+- Uses RelayTypeIndex for O(1) relay type lookups.
 - Mapping file results are cached in mapping_file.py
 
 Usage:
