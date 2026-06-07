@@ -199,6 +199,34 @@ def _fmt_duration(seconds: int) -> str:
     return " ".join(parts)
 
 
+def _usable_work_area(root):
+    """Return (usable_height, top_offset) in Tk pixels for the desktop work
+    area (the screen minus the Windows taskbar).
+
+    DPI-invariant: it reads the taskbar's *fraction* of the screen from the
+    Win32 work area (physical px) and applies that fraction to Tk's own screen
+    height, so the result is correct at any display scaling. Falls back to a
+    small fixed margin off-Windows or if the query fails."""
+    tk_screen_h = root.winfo_screenheight()
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        SPI_GETWORKAREA = 0x0030
+        SM_CYSCREEN = 1
+        rect = wintypes.RECT()
+        if user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(rect), 0):
+            full = user32.GetSystemMetrics(SM_CYSCREEN)
+            work_h = rect.bottom - rect.top
+            if full > 0 and 0 < work_h <= full:
+                usable_h = int(tk_screen_h * work_h / full)
+                top_off = int(tk_screen_h * rect.top / full)
+                return usable_h, top_off
+    except Exception:
+        pass
+    return max(150, tk_screen_h - 90), 0   # non-Windows / query failed
+
+
 def select_pf_elements(pf_result):
     """
     Present every processed PowerFactory element (the ``PfSourceResult``
@@ -360,12 +388,12 @@ def select_pf_elements(pf_result):
                 )
                 leaf_cb.pack(anchor="w", padx=(INDENT_ELEM, 0))
 
-    # ---- Work out how much vertical room the list has ------------------
-    root.update_idletasks()
-    screen_h = root.winfo_screenheight()
-    chrome_h = header.winfo_reqheight() + button_bar.winfo_reqheight() + 40
-    title_bar_allowance = 90
-    max_content_h = max(150, screen_h - chrome_h - title_bar_allowance)
+        # ---- Work out how much vertical room the list has ------------------
+        root.update_idletasks()
+        usable_h, top_off = _usable_work_area(root)
+        window_frame = 50  # title bar + borders (small; taskbar handled above)
+        chrome_h = header.winfo_reqheight() + button_bar.winfo_reqheight() + 40
+        max_content_h = max(150, usable_h - window_frame - chrome_h)
 
     content_h = inner.winfo_reqheight()
     content_w = inner.winfo_reqwidth()
@@ -432,12 +460,13 @@ def select_pf_elements(pf_result):
 
     root.protocol("WM_DELETE_WINDOW", on_exit)   # X button behaves like Exit
 
-    # ---- Centre on screen ----------------------------------------------
+    # ---- Centre horizontally; keep wholly within the work area ---------
     root.update_idletasks()
     w = root.winfo_reqwidth()
-    h = min(root.winfo_reqheight(), screen_h - title_bar_allowance)
+    h = min(root.winfo_reqheight(), usable_h - window_frame)
+    outer_h = h + window_frame
     x = (root.winfo_screenwidth() - w) // 2
-    y = max(0, (screen_h - h) // 3)
+    y = top_off + max(0, (usable_h - outer_h) // 3)  # slightly above centre
     root.geometry(f"{w}x{h}+{x}+{y}")
     root.minsize(w, min(h, 200))
 

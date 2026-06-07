@@ -581,7 +581,13 @@ def read_mapping_file(
             to disambiguate CT-dependent patterns. Optional.
 
     Returns:
-        Tuple of (mapping_file_rows, relay_type) or (None, None) if not found
+        Tuple of (mapping_file_rows, relay_type):
+        - (rows, relay_type) when both the type mapping and the settings file
+          are found;
+        - (None, relay_type) when the pattern is mapped but its settings file
+          is missing/unreadable (the relay type is still returned so the type
+          can be associated);
+        - (None, None) when the pattern is not in the type mapping at all.
     """
     # Look up pattern in type mapping (cached), selecting the CT variant
     type_info = get_type_mapping(rel_pattern, ct_secondary)
@@ -595,7 +601,11 @@ def read_mapping_file(
     raw_rows = _load_mapping_file(mapping_filename)
 
     if raw_rows is None:
-        return None, None
+        # The settings mapping file (column D) is missing/unreadable, but the
+        # relay type (column E) is still known. Return it so the caller can
+        # still associate the relay element with its PowerFactory library type
+        # (check_relay_type); only the per-setting values are unavailable.
+        return None, relay_type
 
     # Process the rows for this device
     # Note: We create a new list here because we modify rows based on pf_device
