@@ -161,9 +161,6 @@ def select_object(objects):
 # =============================================================================
 #
 
-# Per-element processing budget used for the time estimate (seconds).
-_SECONDS_PER_ELEMENT = 30
-
 # Sentinel returned by select_pf_elements when the user presses "Back".
 GO_BACK = object()
 
@@ -183,22 +180,6 @@ def _voltage_sort_key(v):
     if isinstance(v, (int, float)) and not isinstance(v, bool):
         return (0, -float(v), "")
     return (1, 0.0, str(v))
-
-
-def _fmt_duration(seconds: int) -> str:
-    """Format a whole-second duration as 'Hh Mm Ss', dropping leading zero
-    groups but always keeping at least the seconds field (e.g. '1h 30m 0s',
-    '5m 30s', '0s')."""
-    seconds = int(seconds)
-    hours, rem = divmod(seconds, 3600)
-    minutes, secs = divmod(rem, 60)
-    parts = []
-    if hours:
-        parts.append(f"{hours}h")
-    if minutes or parts:
-        parts.append(f"{minutes}m")
-    parts.append(f"{secs}s")
-    return " ".join(parts)
 
 
 def _usable_work_area(root):
@@ -245,8 +226,7 @@ def select_pf_elements(pf_result):
     Window behaviour mirrors ``select_object``: it grows to fit the content,
     is capped to the screen height, and only then grows a vertical scrollbar.
     The bottom bar is always visible and holds, left to right, "Select All",
-    "Okay" and "Exit Application", with a live "Estimated model update time"
-    label pinned to the right (number of ticked elements x 30 s).
+    "Okay", "Back" and "Exit Application".
 
     Returns:
         A ``PfSourceResult`` whose ``refs`` are the selected elements (its
@@ -325,20 +305,12 @@ def select_pf_elements(pf_result):
         else:
             node["var"].set("tri")
 
-    def update_estimate():
-        n = sum(1 for l in leaves if l["var"].get())
-        est_label.config(
-            text=f"Estimated model update time: "
-                 f"{_fmt_duration(n * _SECONDS_PER_ELEMENT)}"
-        )
-
     def on_leaf(node):
-        # var already toggled by tkinter; reflect upward then re-estimate.
+        # var already toggled by tkinter; reflect the change upward.
         p = node["parent"]
         while p is not None:
             _refresh_group(p)
             p = p["parent"]
-        update_estimate()
 
     def on_group(node):
         # On click tkinter sets the var to onvalue/offvalue (tri -> on).
@@ -348,7 +320,6 @@ def select_pf_elements(pf_result):
         while p is not None:
             _refresh_group(p)
             p = p["parent"]
-        update_estimate()
 
     # ---- Build the widget tree (single column, indented) ---------------
     INDENT_SUB, INDENT_VOLT, INDENT_ELEM = 6, 30, 56
@@ -423,7 +394,7 @@ def select_pf_elements(pf_result):
     inner.bind("<Configure>",
                lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
 
-    # ---- Bottom bar: Select All | Okay | Exit ... estimate -------------
+    # ---- Bottom bar: Select All | Okay | Back | Exit Application -------
     select_all_state = {"will_select": True}
 
     def on_select_all():
@@ -431,7 +402,6 @@ def select_pf_elements(pf_result):
         for node in substations:
             _set_subtree(node, on)
         select_all_state["will_select"] = not on
-        update_estimate()
 
     def on_okay():
         chosen = [l["ref"] for l in leaves if l["var"].get()]
@@ -461,10 +431,6 @@ def select_pf_elements(pf_result):
               command=on_back).pack(side="left", padx=(8, 0))
     tk.Button(button_bar, text="Exit Application", width=14,
               command=on_exit).pack(side="left", padx=(8, 0))
-
-    est_label = tk.Label(button_bar, anchor="e", font=("Segoe UI", 10))
-    est_label.pack(side="right")
-    update_estimate()   # show the initial "0s"
 
     root.protocol("WM_DELETE_WINDOW", on_exit)   # X button behaves like Exit
 

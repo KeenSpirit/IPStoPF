@@ -56,6 +56,10 @@ def update_pf(
     # Build type indexes once for O(1) lookups
     app.PrintPlain("Creating indexed database of PowerFactory Fuse and Relay Types")
     relay_index = RelayTypeIndex.build(app)
+
+    app.PrintPlain("Relay type index:")
+    for relay_type in relay_index.get_all():
+        app.PrintPlain(f" {relay_type.loc_name}'")
     fuse_index = FuseTypeIndex.build(app)
 
     updates = False
