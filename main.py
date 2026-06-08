@@ -12,13 +12,11 @@ from mapping.report import write_reconciliation_report
 from config import paths
 from ips_data import sbtrans_settings as ss
 from ips_data import query_database as qd
+from ips_data import ips_settings as ips
 from update_powerfactory.orchestrator import update_pf
 from core import UpdateResult
 
 from importlib import reload
-
-
-import ee_processing_subtrans as eps
 
 reload(ui)
 reload(pe)
@@ -71,7 +69,7 @@ def run_main():
         called_function = False
         ee_grids = oag.regional_grid(app, selected_region)
         grid = ui.select_object(ee_grids)
-        device_list, data_capture_list = eps.get_ips_settings(app, region, batch, called_function, grid)
+        device_list, data_capture_list = ips.get_ips_settings(app, region, batch, called_function, grid)
 
     results, has_updates = update_pf(app, device_list, data_capture_list)
     app.PrintPlain(f"PowerFactory updated (has_updates={has_updates})")

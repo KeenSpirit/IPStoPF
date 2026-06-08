@@ -6,6 +6,7 @@ import math
 
 def select_region():
     """
+        Present a list of strings to the user and return a map of the single string selected.
     Energex
     Regional - Capricorna
     Regional - Far North
@@ -15,25 +16,13 @@ def select_region():
     Regional - Wide Bay
 
     Returns:
-
-    """
-
-def select_ee_grid(ee_grids):
-    """
-    Present a list of objects to the user and return the single object selected.
-
-    Each object must expose a `loc_name` string attribute.
-
-    Sizing behaviour:
-        - The window grows tall enough to show every item, using the fewest
-          columns (up to 3) needed.
-        - Window height is capped so it always stays on screen.
-        - A vertical scrollbar is added ONLY if, even at 3 columns and maximum
-          on-screen height, the items still don't all fit.
-
-    Returns:
-        The object the user selected and confirmed with "Okay".
-        "Exit Application" (or closing the window) terminates the program.
+    Select 'Energex'; Return 'Energex'
+    Select 'Regional - Capricorna'; Return 'CA'
+    Select 'Regional - Far North'; Return 'FN
+    Select 'Regional - Mackay'; Return 'MK'
+    Select 'Regional - North Queensland'; Return 'NQ'
+    Select 'Regional - South West'; Return 'SW'
+    Select 'Regional - Wide Bay'; Return 'WB'
     """
     pass
 
