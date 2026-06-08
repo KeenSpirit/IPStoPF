@@ -50,9 +50,9 @@ def run_main():
             continue
         break
     result = recon.reconcile(ips.by_key, pf_result)
-    app.PrintPlain(result.coverage_summary())
-    report_path = write_reconciliation_report(result, paths.get_output_directory())
-    app.PrintPlain(f"Reconciliation report written to: {report_path}")
+    #app.PrintPlain(result.coverage_summary())
+    #report_path = write_reconciliation_report(result, paths.get_output_directory())
+    #app.PrintPlain(f"Reconciliation report written to: {report_path}")
 
     # --- apply matched settings to PowerFactory ---------------------------
     set_ids, device_list = ss.build_devices_from_reconciliation(app, result)
