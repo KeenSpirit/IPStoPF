@@ -4,6 +4,40 @@ import sys
 import math
 
 
+def select_region():
+    """
+    Energex
+    Regional - Capricorna
+    Regional - Far North
+    Regional - Mackay
+    Regional - North Queensland
+    Regional - South West
+    Regional - Wide Bay
+
+    Returns:
+
+    """
+
+def select_ee_grid(ee_grids):
+    """
+    Present a list of objects to the user and return the single object selected.
+
+    Each object must expose a `loc_name` string attribute.
+
+    Sizing behaviour:
+        - The window grows tall enough to show every item, using the fewest
+          columns (up to 3) needed.
+        - Window height is capped so it always stays on screen.
+        - A vertical scrollbar is added ONLY if, even at 3 columns and maximum
+          on-screen height, the items still don't all fit.
+
+    Returns:
+        The object the user selected and confirmed with "Okay".
+        "Exit Application" (or closing the window) terminates the program.
+    """
+    pass
+
+
 def select_object(objects):
     """
     Present a list of objects to the user and return the single object selected.
@@ -32,7 +66,7 @@ def select_object(objects):
     # ---- Heading / instruction text ------------------------------------
     header = tk.Label(
         root,
-        text="Select Bulk Supply Grid to Update:",
+        text="Select Grid to Update:",
         font=("Segoe UI", 11, "bold"),
         anchor="w",
         padx=12,

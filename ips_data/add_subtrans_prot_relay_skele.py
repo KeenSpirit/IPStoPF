@@ -12,7 +12,7 @@ DATA_SOURCE_STRING = "PRS"
 GAS_SWITCH_STRING = "Gas Switch"
 
 
-def add_relay_skeletons(app, project=None):
+def add_relay_skeletons(app, selected_grid, project=None):
     """
     Get all the protection information from ellipse/gisep and process
     each switch within the model. Add the skeletons if they do not yet
@@ -23,9 +23,6 @@ def add_relay_skeletons(app, project=None):
 
     if project is None:
         project = app.GetActiveProject()
-    if project is None:
-        logger.error("No Active Project or passed project, Ending Script")
-        return
     if project != app.GetActiveProject():
         logger.error(f"Passed project is not the active project. Ending Script")
         return
@@ -63,16 +60,15 @@ def add_relay_skeletons(app, project=None):
     logger.info(f"Building Fuse Dictionary")
     fuse_dict = produce_line_switch_based_dict(fuses_info)
     logger.info(f"Building Gas Switch Dictionary")
-    gas_switches = produce_line_switch_based_dict(gas_switch_info)
+    gas_switch = produce_line_switch_based_dict(gas_switch_info)
     logger.info(f"Dictionaries Built")
 
-    # Produce list of Feeder CBs
-    feeder_cbs = produce_list_of_model_feeder_cbs(project)
-    logger.info(f"Feeder CBs Identified")
-
     # Process Existing switches.
-    elm_coups = project.GetContents("*.ElmCoup", True)
-    sta_switches = project.GetContents("*.StaSwitch", True)
+    selected_grid = selected_grid.GetContents()
+    elm_coups = [element for element in selected_grid
+                if element.GetClassName() == 'ElmCoup']
+    sta_switches = [element for element in selected_grid
+                if element.GetClassName() == 'StaSwitch']
     switches = elm_coups + sta_switches
     num_switches = len(switches)
 
@@ -81,7 +77,7 @@ def add_relay_skeletons(app, project=None):
             logger.info(f"Checking Switch {i+1}/{num_switches}")
 
         process_switch_for_relay_check(
-            app, elm, relay_dict, fuse_dict, recloser_dict, gas_switches, feeder_cbs
+            app, elm, relay_dict, fuse_dict, recloser_dict, gas_switch
         )
 
 
@@ -160,24 +156,8 @@ def produce_line_switch_based_dict(info):
     return d
 
 
-def produce_list_of_model_feeder_cbs(project):
-    """Produce a list of CBs associated with feeders"""
-    feeders = project.GetContents("*.ElmFeeder", True)
-
-    feeder_cbs = list()
-
-    for feeder in feeders:
-        cub = feeder.GetAttribute("obj_id")
-        if cub:
-            switch = cub.GetAttribute("obj_id")
-            if switch:
-                feeder_cbs.append(switch)
-
-    return feeder_cbs
-
-
 def process_switch_for_relay_check(
-    app, elm, relay_dict, fuse_dict, recloser_dict, gas_switch, feeder_cbs
+    app, elm, relay_dict, fuse_dict, recloser_dict, gas_switch
 ):
     """
     Check if elm should have a relay, recloser or fuse.
@@ -186,14 +166,6 @@ def process_switch_for_relay_check(
     Will also delete any objects that are in the wrong location
     from the ETL where the correct switch location is within the model
     """
-
-    # Ignore Switches in the Substation that are not feeder CBs
-    # not short-circuited so the error message can be more detailed
-    parent = elm.GetParent()
-    pot_feeder_cb = True
-    if parent.GetClassName() == "ElmSubstat":
-        if elm not in feeder_cbs:
-            pot_feeder_cb = False
 
     # Get the expected foreign key (ellipse ID)
     foreign_key = elm.GetAttribute("for_name")
@@ -221,25 +193,19 @@ def process_switch_for_relay_check(
         # Handle potential for multiple fuses on one recloser
         for relay_data in relay_info:
             # Relay associated, ensure it exists
-            if pot_feeder_cb:
-                logger.debug(
-                    f"setting up relay {relay_data.plant_no} on {elm},"
-                    f" {relay_data.ellipse_equip_no}"
-                )
-                new_relay = setup_relay(
-                    app=app,
-                    elm=elm,
-                    asset_id=relay_data.asset_id,
-                    plant_no=relay_data.plant_no,
-                    ellipse_id=relay_data.ellipse_equip_no,
-                    relay_class="ElmRelay",
-                )
-                new_devices.append(new_relay)
-            else:
-                logger.debug(
-                    f"Skipping {elm} as it is not a feeder CB in a sub: "
-                    f"Data: {relay_data} "
-                )
+            logger.debug(
+                f"setting up relay {relay_data.plant_no} on {elm},"
+                f" {relay_data.ellipse_equip_no}"
+            )
+            new_relay = setup_relay(
+                app=app,
+                elm=elm,
+                asset_id=relay_data.asset_id,
+                plant_no=relay_data.plant_no,
+                ellipse_id=relay_data.ellipse_equip_no,
+                relay_class="ElmRelay",
+            )
+            new_devices.append(new_relay)
 
     # Reclosers
     try:
@@ -255,21 +221,15 @@ def process_switch_for_relay_check(
         # Handle potential for multiple fuses on one recloser
         for recloser_data in recloser_info:
             # Relay associated, ensure it exists
-            if pot_feeder_cb:
-                new_recloser = setup_relay(
-                    app=app,
-                    elm=elm,
-                    asset_id=recloser_data.asset_id,
-                    plant_no=recloser_data.plant_no,
-                    ellipse_id=recloser_data.equip_no,
-                    relay_class="ElmRelay",
-                )
-                new_devices.append(new_recloser)
-            else:
-                logger.info(
-                    f"Skipping {elm} as it is not a feeder CB in a sub: "
-                    f"Data: {recloser_data} "
-                )
+            new_recloser = setup_relay(
+                app=app,
+                elm=elm,
+                asset_id=recloser_data.asset_id,
+                plant_no=recloser_data.plant_no,
+                ellipse_id=recloser_data.equip_no,
+                relay_class="ElmRelay",
+            )
+            new_devices.append(new_recloser)
 
     # Fuses
     try:
@@ -285,21 +245,16 @@ def process_switch_for_relay_check(
         # Handle potential for multiple fuses on one switch
         for fuse_data in fuse_info:
             # Fuse associated, ensure it exists
-            if pot_feeder_cb:
-                new_fuse = setup_relay(
-                    app=app,
-                    elm=elm,
-                    asset_id=fuse_data.asset_id,
-                    plant_no=fuse_data.plant_no,
-                    ellipse_id=fuse_data.equip_no,
-                    relay_class="RelFuse",
-                )
-                new_devices.append(new_fuse)
-            else:
-                logger.info(
-                    f"Skipping {elm} as it is not a feeder CB in a sub: "
-                    f"Data: {fuse_data} "
-                )
+            new_fuse = setup_relay(
+                app=app,
+                elm=elm,
+                asset_id=fuse_data.asset_id,
+                plant_no=fuse_data.plant_no,
+                ellipse_id=fuse_data.equip_no,
+                relay_class="RelFuse",
+            )
+            new_devices.append(new_fuse)
+
     # Gas Switches
     try:
         gas_switch_info = gas_switch[ecorp_id]
@@ -314,22 +269,16 @@ def process_switch_for_relay_check(
         # Handle potential for multiple Gas Switches on one switch
         for gas_switch_data in gas_switch_info:
             # Fuse associated, ensure it exists
-            if pot_feeder_cb:
-                new_gs = setup_relay(
-                    app=app,
-                    elm=elm,
-                    asset_id=gas_switch_data.asset_id,
-                    plant_no=gas_switch_data.plant_no,
-                    ellipse_id=gas_switch_data.equip_no,
-                    relay_class="ElmRelay",
-                    gas_switch=True,
-                )
-                new_devices.append(new_gs)
-            else:
-                logger.info(
-                    f"Skipping {elm} as it is not a feeder CB in a sub: "
-                    f"Data: {gas_switch_data} "
-                )
+            new_gs = setup_relay(
+                app=app,
+                elm=elm,
+                asset_id=gas_switch_data.asset_id,
+                plant_no=gas_switch_data.plant_no,
+                ellipse_id=gas_switch_data.equip_no,
+                relay_class="ElmRelay",
+                gas_switch=True,
+            )
+            new_devices.append(new_gs)
 
     return new_devices
 

@@ -17,6 +17,9 @@ from core import UpdateResult
 
 from importlib import reload
 
+
+import ee_processing_subtrans as eps
+
 reload(ui)
 reload(pe)
 
@@ -31,34 +34,45 @@ def run_main():
     # Turn the echo off (suppress output window messages)
     echo(app)
 
-    # Obtain the IPS setting-ID data from the database (corporate cache query).
-    # In development this report was read from the Report-Cache-
-    # ProtectionSettingIDs-EX CSV via paths.get_ips_data(); in production it is
-    # sourced through the same query layer used for the detailed and CT/VT
-    # settings below. Subtransmission is an Energex (EX) dataset.
-    ips_records = qd.get_setting_id_records(app, ss.REGION)
-    ips = ii.ingest_ips_records(ips_records)
+    selected_region = ui.select_region()
 
-    exg_grids_sorted = oag.all_egx_grids(app)
-    while True:
-        selected_grid = ui.select_object(exg_grids_sorted)
-        sites = []
-        sites.extend(pe.process_elements(app, selected_grid))
-        pf_result = pf_source.pf_refs_from_sites(sites)
-        pf_result = ui.select_pf_elements(pf_result)
-        if pf_result is ui.GO_BACK:
-            continue
-        break
-    result = recon.reconcile(ips.by_key, pf_result)
-    #app.PrintPlain(result.coverage_summary())
-    #report_path = write_reconciliation_report(result, paths.get_output_directory())
-    #app.PrintPlain(f"Reconciliation report written to: {report_path}")
+    if selected_region == "Energex":
+        # Obtain the IPS setting-ID data from the database (corporate cache query).
+        # In development this report was read from the Report-Cache-
+        # ProtectionSettingIDs-EX CSV via paths.get_ips_data(); in production it is
+        # sourced through the same query layer used for the detailed and CT/VT
+        # settings below. Subtransmission is an Energex (EX) dataset.
+        ips_records = qd.get_setting_id_records(app, ss.REGION)
+        ips = ii.ingest_ips_records(ips_records)
 
-    # --- apply matched settings to PowerFactory ---------------------------
-    set_ids, device_list = ss.build_devices_from_reconciliation(app, result)
-    app.PrintPlain(f"Built {len(device_list)} devices from {len(set_ids)} setting IDs")
+        exg_grids_sorted = oag.all_egx_grids(app)
+        while True:
+            selected_grid = ui.select_object(exg_grids_sorted)
+            sites = []
+            sites.extend(pe.process_elements(app, selected_grid))
+            pf_result = pf_source.pf_refs_from_sites(sites)
+            pf_result = ui.select_pf_elements(pf_result)
+            if pf_result is ui.GO_BACK:
+                continue
+            break
+        result = recon.reconcile(ips.by_key, pf_result)
+        # app.PrintPlain(result.coverage_summary())
+        # report_path = write_reconciliation_report(result, paths.get_output_directory())
+        # app.PrintPlain(f"Reconciliation report written to: {report_path}")
 
-    data_capture_list: list[UpdateResult] = []
+        # --- apply matched settings to PowerFactory ---------------------------
+        set_ids, device_list = ss.build_devices_from_reconciliation(app, result)
+        app.PrintPlain(f"Built {len(device_list)} devices from {len(set_ids)} setting IDs")
+
+        data_capture_list: list[UpdateResult] = []
+    else:
+        region = "Ergon"
+        batch = True
+        called_function = False
+        ee_grids = oag.regional_grid(app, selected_region)
+        grid = ui.select_object(ee_grids)
+        device_list, data_capture_list = eps.get_ips_settings(app, region, batch, called_function, grid)
+
     results, has_updates = update_pf(app, device_list, data_capture_list)
     app.PrintPlain(f"PowerFactory updated (has_updates={has_updates})")
 

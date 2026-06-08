@@ -24,6 +24,7 @@ from core import ProtectionDevice, UpdateResult
 from ips_data import query_database as qd
 from ips_data import ee_settings as ee
 from ips_data import ex_settings as ex
+from ips_data import add_subtrans_prot_relay_skele as asprs
 from ips_data.setting_index import SettingIndex
 from utils.pf_utils import get_all_protection_devices
 from ui.device_selection import user_selection
@@ -34,7 +35,8 @@ def get_ips_settings(
     app,
     region: str,
     batch: bool,
-    called_function: bool
+    called_function: bool,
+    grid: Optional[object]
 ) -> Tuple[List[ProtectionDevice], List[UpdateResult]]:
     """
     Retrieve IPS settings and create ProtectionDevice objects.
@@ -63,7 +65,7 @@ def get_ips_settings(
 
     # Get selected devices and their setting IDs
     set_ids, device_list, data_capture_list = _get_selected_devices(
-        app, batch, region, data_capture_list, setting_index, called_function
+        app, batch, region, data_capture_list, setting_index, called_function, grid
     )
 
     # Load detailed settings for all devices
@@ -86,7 +88,8 @@ def _get_selected_devices(
     region: str,
     data_capture_list: List[UpdateResult],
     setting_index: SettingIndex,
-    called_function: bool
+    called_function: bool,
+    grid: Optional[object]
 ) -> Tuple[List[str], List[ProtectionDevice], List[UpdateResult]]:
     """
     Get the list of devices to process based on mode and user selection.
@@ -122,7 +125,10 @@ def _get_selected_devices(
             )
         else:
             # Add relay skeletons for Ergon
-            add_protection_relay_skeletons.main(app)
+            if grid:
+                asprs.add_relay_skeletons(app, grid)
+            else:
+                add_protection_relay_skeletons.main(app)
             app.ClearOutputWindow()
             app.PrintPlain("Creating a list of Setting IDs for all Ergon devices")
             set_ids, device_list, data_capture_list = ee.ergon_all_dev_list(
@@ -134,6 +140,29 @@ def _get_selected_devices(
         data_capture_list.append(UpdateResult.failed_cb(cb))
 
     return set_ids, device_list, data_capture_list
+
+
+def get_switches(app, project, selected_grid):
+
+
+    # Produce list of Feeder CBs
+    feeder_cbs = produce_list_of_model_feeder_cbs(project)
+
+    # Process Existing switches.
+    elm_coups = project.GetContents("*.ElmCoup", True)
+    sta_switches = project.GetContents("*.StaSwitch", True)
+    switches = elm_coups + sta_switches
+
+
+    # Process Existing switches.
+    selected_grid = selected_grid.GetContents()
+    elm_coups = [element for element in selected_grid
+                if element.GetClassName() == 'ElmCoup']
+    sta_switches = [element for element in selected_grid
+                if element.GetClassName() == 'StaSwitch']
+    switches = elm_coups + sta_switches
+
+    return switches
 
 
 def _get_user_selected_devices(
