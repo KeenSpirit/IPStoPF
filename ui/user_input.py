@@ -6,25 +6,104 @@ import math
 
 def select_region():
     """
-        Present a list of strings to the user and return a map of the single string selected.
-    Energex
-    Regional - Capricorna
-    Regional - Far North
-    Regional - Mackay
-    Regional - North Queensland
-    Regional - South West
-    Regional - Wide Bay
+    Present a list of strings to the user and return a map of the single string selected.
 
     Returns:
     Select 'Energex'; Return 'Energex'
-    Select 'Regional - Capricorna'; Return 'CA'
-    Select 'Regional - Far North'; Return 'FN
+    Select 'Regional - Capricornia'; Return 'CA'
+    Select 'Regional - Far North'; Return 'FN'
     Select 'Regional - Mackay'; Return 'MK'
     Select 'Regional - North Queensland'; Return 'NQ'
     Select 'Regional - South West'; Return 'SW'
     Select 'Regional - Wide Bay'; Return 'WB'
     """
-    pass
+    # Display label -> value returned to the caller. Order is preserved so the
+    # regions appear in the window exactly as listed here. "Energex" maps to
+    # itself; each regional grid maps to its two-letter code.
+    regions = [
+        ("Energex",                     "Energex"),
+        ("Regional - Capricornia",       "CA"),
+        ("Regional - Far North",        "FN"),
+        ("Regional - Mackay",           "MK"),
+        ("Regional - North Queensland", "NQ"),
+        ("Regional - South West",       "SW"),
+        ("Regional - Wide Bay",         "WB"),
+    ]
+
+    root = tk.Tk()
+    root.title("IPS to PowerFactory - Sub-transmission")
+
+    result = {"value": None}   # holder so nested callbacks can write back
+
+    # ---- Heading / instruction text ------------------------------------
+    header = tk.Label(
+        root,
+        text="Select Region to Update:",
+        font=("Segoe UI", 11, "bold"),
+        anchor="w",
+        padx=12,
+        pady=10,
+    )
+    header.pack(side="top", fill="x")
+
+    # ---- Bottom button bar (fixed, sits at the bottom-left) ------------
+    button_bar = tk.Frame(root)
+    button_bar.pack(side="bottom", fill="x", padx=12, pady=10)
+
+    # ---- Body: one radio button per region -----------------------------
+    body = tk.Frame(root)
+    body.pack(side="top", fill="both", expand=True, padx=12)
+
+    selected = tk.IntVar(value=-1)   # -1 means "nothing chosen yet"
+    for i, (label, _code) in enumerate(regions):
+        tk.Radiobutton(
+            body, text=label, variable=selected, value=i,
+            anchor="w", padx=6,
+        ).grid(row=i, column=0, sticky="w", pady=1)
+
+    # ---- Button callbacks ----------------------------------------------
+    def on_okay():
+        idx = selected.get()
+        if idx < 0:
+            messagebox.showwarning(
+                "No selection",
+                "Please make a selection before proceeding.",
+                parent=root,
+            )
+            return
+        result["value"] = regions[idx][1]
+        root.destroy()
+
+    def on_exit():
+        root.destroy()
+        sys.exit(0)
+
+    tk.Button(button_bar, text="Okay", width=12,
+              command=on_okay).pack(side="left")
+    tk.Button(button_bar, text="Exit Application", width=14,
+              command=on_exit).pack(side="left", padx=(8, 0))
+
+    root.protocol("WM_DELETE_WINDOW", on_exit)   # X button behaves like Exit
+
+    # ---- Centre on screen (mirrors select_object) ----------------------
+    root.update_idletasks()
+    w = root.winfo_reqwidth()
+    screen_h = root.winfo_screenheight()
+    title_bar_allowance = 90                       # title bar + taskbar + margin
+    h = min(root.winfo_reqheight(), screen_h - title_bar_allowance)
+    x = (root.winfo_screenwidth() - w) // 2
+    y = max(0, (screen_h - h) // 3)                # slightly above dead centre
+    root.geometry(f"{w}x{h}+{x}+{y}")
+    root.minsize(w, min(h, 200))
+
+    root.mainloop()
+
+    # Reaching here means the window closed without "Okay" (the X button is
+    # already routed to on_exit). Treat it as an exit for safety.
+    if result["value"] is None:
+        sys.exit(0)
+
+    return result["value"]
 
 
 def select_object(objects):

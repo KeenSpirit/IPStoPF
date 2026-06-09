@@ -52,7 +52,7 @@ def regional_grid(app, acronym: str) ->list:
                  if grid.GetClassName() == 'ElmNet'
                   and [element for element in grid.GetContents() if element.GetClassName() == 'ElmTerm']
                   and grid.IsCalcRelevant()
-                  and grid.loc_name[:1] == acronym]
+                  and grid.loc_name[:2] == acronym]
                  )
 
     regional_grids_sorted = sorted(regional_grids, key=lambda grid: grid.GetAttribute('loc_name'))
