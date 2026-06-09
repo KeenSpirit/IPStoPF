@@ -70,13 +70,13 @@ def get_ips_settings(
 
     # Load detailed settings for all devices
     ips_settings, ips_it_settings = qd.batch_settings(
-        app, region, called_function, set_ids
+        app, region, batch, set_ids
     )
 
     # Associate settings with each device
     _associate_device_settings(
         app, device_list, ips_settings, ips_it_settings,
-        region, called_function
+        region, batch
     )
 
     return device_list, data_capture_list
@@ -121,7 +121,7 @@ def _get_selected_devices(
         if region == "Energex":
             app.PrintPlain("Creating a list of Setting IDs for all Energex devices")
             device_list, failed_cbs, set_ids = ex.create_new_devices(
-                app, setting_index, called_function
+                app, setting_index, batch
             )
         else:
             # Add relay skeletons for Ergon
@@ -132,7 +132,7 @@ def _get_selected_devices(
             # app.ClearOutputWindow()
             app.PrintPlain("Creating a list of Setting IDs for all Ergon devices")
             set_ids, device_list, data_capture_list = ee.ergon_all_dev_list(
-                app, data_capture_list, setting_index, called_function
+                app, data_capture_list, setting_index, batch
             )
 
     # Record failed CBs using UpdateResult
@@ -192,7 +192,7 @@ def _associate_device_settings(
     ips_settings: Dict[str, List[Dict]],
     ips_it_settings: List,
     region: str,
-    called_function: bool
+    batch: bool
 ) -> None:
     """
     Associate detailed settings with each device.
@@ -205,7 +205,7 @@ def _associate_device_settings(
         ips_settings: Dictionary of relay settings by setting ID
         ips_it_settings: List of instrument transformer settings
         region: "Energex" or "Ergon"
-        called_function: True if batch mode
+        batch: True if batch mode
     """
     total = len(device_list)
 
@@ -220,7 +220,7 @@ def _associate_device_settings(
 
         # Load relay settings for batch runs
         # (Non-batch runs already loaded settings during device creation)
-        if called_function and ips_settings:
+        if batch and ips_settings:
             device_object.associated_settings(ips_settings)
 
         # Load CT/VT settings

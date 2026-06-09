@@ -73,7 +73,7 @@ def build_devices_from_reconciliation(
     if setting_ids:
         app.PrintPlain(f"Fetching IPS settings for {len(setting_ids)} setting IDs")
         ips_settings, ips_it_settings = qd.batch_settings(
-            app, REGION, called_function=True, set_ids=setting_ids
+            app, REGION, batch=True, set_ids=setting_ids
         )
         for device in list_of_devices:
             device.associated_settings(ips_settings)
