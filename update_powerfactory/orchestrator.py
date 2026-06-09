@@ -57,9 +57,6 @@ def update_pf(
     app.PrintPlain("Creating indexed database of PowerFactory Fuse and Relay Types")
     relay_index = RelayTypeIndex.build(app)
 
-    app.PrintPlain("Relay type index:")
-    for relay_type in relay_index.get_all():
-        app.PrintPlain(f" {relay_type.loc_name}'")
     fuse_index = FuseTypeIndex.build(app)
 
     updates = False
@@ -70,6 +67,7 @@ def update_pf(
 
     try:
         for i, device_object in enumerate(lst_of_devs):
+            app.PrintPlain(device_object)
             # Progress reporting
             if i % 10 == 0:
                 app.PrintPlain(f"Device {i} of {len(lst_of_devs)} is being updated")

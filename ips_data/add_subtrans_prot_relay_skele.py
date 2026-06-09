@@ -72,6 +72,8 @@ def add_relay_skeletons(app, selected_grid, project=None):
     switches = elm_coups + sta_switches
     num_switches = len(switches)
 
+    app.PrintPlain("CHECK 1")
+
     for i, elm in enumerate(switches):
         if i % 100 == 0:
             logger.info(f"Checking Switch {i+1}/{num_switches}")

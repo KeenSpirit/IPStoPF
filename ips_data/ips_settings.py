@@ -129,7 +129,7 @@ def _get_selected_devices(
                 asprs.add_relay_skeletons(app, grid)
             else:
                 add_protection_relay_skeletons.main(app)
-            app.ClearOutputWindow()
+            # app.ClearOutputWindow()
             app.PrintPlain("Creating a list of Setting IDs for all Ergon devices")
             set_ids, device_list, data_capture_list = ee.ergon_all_dev_list(
                 app, data_capture_list, setting_index, called_function
@@ -140,29 +140,6 @@ def _get_selected_devices(
         data_capture_list.append(UpdateResult.failed_cb(cb))
 
     return set_ids, device_list, data_capture_list
-
-
-def get_switches(app, project, selected_grid):
-
-
-    # Produce list of Feeder CBs
-    feeder_cbs = produce_list_of_model_feeder_cbs(project)
-
-    # Process Existing switches.
-    elm_coups = project.GetContents("*.ElmCoup", True)
-    sta_switches = project.GetContents("*.StaSwitch", True)
-    switches = elm_coups + sta_switches
-
-
-    # Process Existing switches.
-    selected_grid = selected_grid.GetContents()
-    elm_coups = [element for element in selected_grid
-                if element.GetClassName() == 'ElmCoup']
-    sta_switches = [element for element in selected_grid
-                if element.GetClassName() == 'StaSwitch']
-    switches = elm_coups + sta_switches
-
-    return switches
 
 
 def _get_user_selected_devices(
