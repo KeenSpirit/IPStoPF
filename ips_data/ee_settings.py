@@ -82,7 +82,7 @@ def ee_device_list(
             fuse_type=fuse_type,
             fuse_size=fuse_size,
             setting_index=setting_index,
-            called_function=False,
+            batch=False,
         )
 
     return setting_ids, list_of_devices, data_capture_list
@@ -92,7 +92,7 @@ def ergon_all_dev_list(
     app,
     data_capture_list: List[UpdateResult],
     setting_index: SettingIndex,
-    called_function: bool
+    batch: bool
 ) -> Tuple[List[str], List[ProtectionDevice], List[UpdateResult]]:
     """
     Process all protection devices in the active Ergon project.
@@ -104,7 +104,7 @@ def ergon_all_dev_list(
         app: PowerFactory application object
         data_capture_list: List to append status/error records to
         setting_index: Indexed IPS settings for O(1) lookups
-        called_function: True if called from batch update
+        batch: True if called from batch update
 
     Returns:
         Tuple of (setting_ids, list_of_devices, data_capture_list)
@@ -155,7 +155,7 @@ def ergon_all_dev_list(
             fuse_type=fuse_type,
             fuse_size=fuse_size,
             setting_index=setting_index,
-            called_function=called_function,
+            batch=batch,
         )
 
     return setting_ids, list_of_devices, data_capture_list
@@ -269,7 +269,7 @@ def _get_setting_id_indexed(
     fuse_type: Optional[str],
     fuse_size: Optional[str],
     setting_index: SettingIndex,
-    called_function: bool,
+    batch: bool,
 ) -> Tuple[List[str], List[ProtectionDevice]]:
     """
     Find setting ID(s) for a device using the indexed lookup.
@@ -286,7 +286,7 @@ def _get_setting_id_indexed(
         fuse_type: Type of fuse if applicable
         fuse_size: Size of fuse if applicable
         setting_index: The indexed settings for O(1) lookup
-        called_function: True if called from batch update
+        batch: True if called from batch update
 
     Returns:
         Tuple of (updated setting_ids, updated list_of_devices)
@@ -298,7 +298,7 @@ def _get_setting_id_indexed(
         # Found exact match - use it
         for record in exact_matches:
             device = _create_device_from_record(
-                app, record, pf_device, fuse_type, fuse_size, called_function
+                app, record, pf_device, fuse_type, fuse_size, batch
             )
             if device:
                 list_of_devices.append(device)
@@ -322,7 +322,7 @@ def _get_setting_id_indexed(
 
             if target_device:
                 device = _create_device_from_record(
-                    app, record, target_device, fuse_type, fuse_size, called_function
+                    app, record, target_device, fuse_type, fuse_size, batch
                 )
                 if device:
                     list_of_devices.append(device)

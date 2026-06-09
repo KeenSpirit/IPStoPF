@@ -196,7 +196,7 @@ def error_message(app, message: str) -> None:
 def batch_settings(
     app,
     region: str,
-    called_function: bool,
+    batch: bool,
     set_ids: List[str]
 ) -> Tuple[Dict[str, List[Dict]], List]:
     """
@@ -208,7 +208,7 @@ def batch_settings(
     Args:
         app: PowerFactory application object
         region: "Energex" or "Ergon"
-        called_function: True if called from batch update (loads all settings)
+        batch: True if called from batch update (loads all settings)
         set_ids: List of relay setting IDs to fetch
 
     Returns:
@@ -219,13 +219,13 @@ def batch_settings(
     ips_settings: Dict[str, List[Dict]] = {}
 
     if region == "Energex":
-        if called_function:
+        if batch:
             ips_settings = _fetch_settings_in_batches(
                 app, set_ids, seq_get_ips_settings, batch_size=900
             )
         ips_it_settings = seq_get_ips_it_details(app, set_ids)
     else:
-        if called_function:
+        if batch:
             ips_settings = _fetch_settings_in_batches(
                 app, set_ids, reg_get_ips_settings, batch_size=900
             )

@@ -56,7 +56,7 @@ def ex_device_list(
             switch=switch,
             list_of_devices=list_of_devices,
             setting_index=setting_index,
-            called_function=False,
+            batch=False,
             cb_alt_name_list=cb_alt_name_list,
         )
         setting_ids.extend(new_ids)
@@ -144,7 +144,7 @@ def _filter_to_selections(
 def create_new_devices(
     app,
     setting_index: SettingIndex,
-    called_function: bool
+    batch: bool
 ) -> Tuple[List[ProtectionDevice], List, List[str]]:
     """
     Batch update for Energex (SEQ) models.
@@ -155,7 +155,7 @@ def create_new_devices(
     Args:
         app: PowerFactory application object
         setting_index: Indexed IPS settings for O(1) lookups
-        called_function: True if called from batch update
+        batch: True if called from batch update
         
     Returns:
         Tuple of (list_of_devices, failed_cbs, setting_ids)
@@ -186,7 +186,7 @@ def create_new_devices(
             switch=switch,
             list_of_devices=list_of_devices,
             setting_index=setting_index,
-            called_function=called_function,
+            batch=batch,
             cb_alt_name_list=cb_alt_name_list,
         )
         setting_ids.extend(new_ids)
@@ -406,7 +406,7 @@ def _get_setting_id_indexed(
     switch,
     list_of_devices: List[ProtectionDevice],
     setting_index: SettingIndex,
-    called_function: bool,
+    batch: bool,
     cb_alt_name_list: List[Dict],
 ) -> Tuple[List[str], List[ProtectionDevice]]:
     """
@@ -427,7 +427,7 @@ def _get_setting_id_indexed(
         switch: The switch to find settings for
         list_of_devices: List to append new devices to
         setting_index: Indexed IPS settings
-        called_function: True if batch update
+        batch: True if batch update
         cb_alt_name_list: CB name mapping list
         
     Returns:
@@ -452,7 +452,7 @@ def _get_setting_id_indexed(
     # Create devices from matching records
     for record in records:
         device = _create_device_from_record(
-            app, record, switch, called_function
+            app, record, switch, batch
         )
         
         if device:
