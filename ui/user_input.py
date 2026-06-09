@@ -9,7 +9,7 @@ def select_region():
     Present a list of strings to the user and return a map of the single string selected.
 
     Returns:
-    Select 'Energex'; Return 'Energex'
+    Select 'South East'; Return 'Energex'
     Select 'Regional - Capricornia'; Return 'CA'
     Select 'Regional - Far North'; Return 'FN'
     Select 'Regional - Mackay'; Return 'MK'
@@ -21,7 +21,7 @@ def select_region():
     # regions appear in the window exactly as listed here. "Energex" maps to
     # itself; each regional grid maps to its two-letter code.
     regions = [
-        ("Energex",                     "Energex"),
+        ("South East",                  "Energex"),
         ("Regional - Capricornia",       "CA"),
         ("Regional - Far North",        "FN"),
         ("Regional - Mackay",           "MK"),

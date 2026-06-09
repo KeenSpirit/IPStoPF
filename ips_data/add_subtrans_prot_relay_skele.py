@@ -64,23 +64,24 @@ def add_relay_skeletons(app, selected_grid, project=None):
     logger.info(f"Dictionaries Built")
 
     # Process Existing switches.
-    selected_grid = selected_grid.GetContents()
-    elm_coups = [element for element in selected_grid
-                if element.GetClassName() == 'ElmCoup']
-    sta_switches = [element for element in selected_grid
-                if element.GetClassName() == 'StaSwitch']
-    switches = elm_coups + sta_switches
+    elm_coups = selected_grid.GetContents("*.ElmCoup", 1)
+    sta_switches = selected_grid.GetContents("*.StaSwitch", 1)
+    lines = selected_grid.GetContents("*.Elmlne", 1)
+    tfmr = selected_grid.GetContents("*.ElmTr2", 1)
+    terms = selected_grid.GetContents("*.ElmTerm", 1)
+    switches = elm_coups + sta_switches + lines + tfmr + terms
     num_switches = len(switches)
 
-    app.PrintPlain("CHECK 1")
-
+    all_new = []
     for i, elm in enumerate(switches):
         if i % 100 == 0:
             logger.info(f"Checking Switch {i+1}/{num_switches}")
 
-        process_switch_for_relay_check(
+        new_devices = process_switch_for_relay_check(
             app, elm, relay_dict, fuse_dict, recloser_dict, gas_switch
         )
+        all_new.extend(new_devices)
+    app.PrintPlain(f"all_new length {len(all_new)}")
 
 
 def remove_pds_elements(project):
@@ -149,7 +150,10 @@ def produce_line_switch_based_dict(info):
     d = defaultdict(list)
 
     for data in info:
-        asset_id = data.asset_id
+        try:
+            asset_id = data.asset_id
+        except AttributeError:
+            continue
         if not asset_id:
             logger.warning(f'Null asset_id: "{asset_id}" in {data}')
         else:
@@ -440,7 +444,7 @@ def determine_root_cub_relay_exists(elm, expected_relay_foreign_key, relay_class
     """
     found_relay = None
 
-    if elm.GetClassName() == "ElmCoup":
+    if elm.GetClassName() in ["ElmCoup", "Elmlne", "ElmTr2"]:
         # Get the 0ths cubicle for returning
         root_cub = elm.GetCubicle(0)
         # Check for an existing relay or fuse
@@ -458,8 +462,23 @@ def determine_root_cub_relay_exists(elm, expected_relay_foreign_key, relay_class
         # Check for an existing relay or fuse.
         relays = root_cub.GetContents(f"*.{relay_class}")
 
+    elif elm.GetClassName() == "ElmTerm":
+        # Get the cubicle to put the relay in
+        root_cub = elm.GetContents("*.StaCubic")[0]
+        # Check for an existing relay or fuse.
+        # Check for an existing relay or fuse
+        cubs = elm.GetContents("*.StaCubic")
+        cubs = [c for c in cubs if c]
+
+        relays = list()
+        for cub in cubs:
+            cub_relays = cub.GetContents(f"*.{relay_class}")
+            relays.extend(cub_relays)
+
     else:
         raise RuntimeError(f"{elm} is not of a handled classname")
+
+    relays = [relay for relay in relays if relay.GetAttribute("for_name") == expected_relay_foreign_key]
 
     return root_cub, relays
 
@@ -491,6 +510,11 @@ def ellipse_ecorp_asset_id_extraction(foreign_key: str):
             "which is a {} not a string".format(foreign_key, type(foreign_key))
         )
 
+    # Strip a leading prefix such as "001:" (everything up to and including the first colon)
+    # before decoding.
+    if ":" in foreign_key:
+        foreign_key = foreign_key.split(":", 1)[1]
+
     for delete_string in remove_list:
         foreign_key = foreign_key.replace(delete_string, "")
 
@@ -498,6 +522,7 @@ def ellipse_ecorp_asset_id_extraction(foreign_key: str):
 
     s = p.search(foreign_key)
     if s:
-        return s.group().rjust(12, "0")
+        return s.group()
+        #return s.group().rjust(12, "0")
     else:
         return None

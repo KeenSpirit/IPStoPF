@@ -71,11 +71,10 @@ def run_main():
         called_function = False
         ee_grids = oag.regional_grid(app, selected_region)
         grid = ui.select_object(ee_grids)
-        app.PrintPlain(f"grid: {grid}")
         device_list, data_capture_list = ips_settings.get_ips_settings(app, region, batch, called_function, grid)
 
-    results, has_updates = orchestrator.update_pf(app, device_list, data_capture_list)
-    app.PrintPlain(f"PowerFactory updated (has_updates={has_updates})")
+    # results, has_updates = orchestrator.update_pf(app, device_list, data_capture_list)
+    # app.PrintPlain(f"PowerFactory updated (has_updates={has_updates})")
 
     # Restore the echo
     echo(app, off=False)

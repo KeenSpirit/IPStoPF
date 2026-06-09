@@ -30,6 +30,7 @@ from utils.pf_utils import get_all_protection_devices
 from ui.device_selection import user_selection
 
 reload(ex)
+reload(asprs)
 
 def get_ips_settings(
     app,

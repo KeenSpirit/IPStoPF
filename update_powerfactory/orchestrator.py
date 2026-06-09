@@ -67,7 +67,6 @@ def update_pf(
 
     try:
         for i, device_object in enumerate(lst_of_devs):
-            app.PrintPlain(device_object)
             # Progress reporting
             if i % 10 == 0:
                 app.PrintPlain(f"Device {i} of {len(lst_of_devs)} is being updated")
