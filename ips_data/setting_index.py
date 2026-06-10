@@ -16,7 +16,11 @@ from typing import Dict, List, Optional, Any
 
 from core import SettingRecord
 from update_powerfactory.mapping_file import is_excluded_pattern
-from config.region_config import get_substation_mapping, SUFFIX_EXPANSIONS
+from config.region_config import (
+    get_substation_mapping,
+    SUFFIX_EXPANSIONS,
+    coupler_base_name,
+)
 
 
 class SettingIndex:
@@ -157,6 +161,15 @@ class SettingIndex:
         # Check if this is a double cable box configuration (ends with "A+B")
         expanded_names = self._expand_double_cable_box_name(base_name)
 
+        # Also index under the coupler/base name (suffix stripped) so that an
+        # ElmCoup bus coupler — modelled in PF with the base name only (e.g.
+        # "CLD16") — matches the per-cable-box IPS records ("CLD16A", "CLD16B",
+        # "CLD16A+B"). Additive: existing per-box keys are preserved.
+        index_names = list(expanded_names)
+        base = coupler_base_name(base_name)
+        if base and base not in index_names:
+            index_names.append(base)
+
         # Get substation for substation-filtered lookups
         substation = None
         if record.locationpathenu:
@@ -171,10 +184,8 @@ class SettingIndex:
                     if sub in sub_map:
                         substation = sub_map[sub]
 
-        # Index under each expanded name (or just the original if no expansion)
-        for switch_name in expanded_names:
+        for switch_name in index_names:
             self._by_switch_name[switch_name].append(record)
-
             # Also index by substation + switch for disambiguating same-named switches
             if substation:
                 self._by_substation_and_switch[substation][switch_name].append(record)

@@ -249,7 +249,9 @@ def determine_region(prjt: Any) -> str:
     else:
         base_prjt_fld = prjt.der_baseproject.fold_id.loc_name
 
-    if base_prjt_fld == "SEQ Models":
+    if base_prjt_fld == "EQL Subtransmission":
+        region = "Subtransmission"
+    elif base_prjt_fld == "SEQ Models":
         region = "Energex"
     else:
         region = "Ergon"

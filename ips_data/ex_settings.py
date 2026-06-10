@@ -467,32 +467,32 @@ def _get_setting_id_indexed(
 def _get_switch_info(switch, cb_alt_name_list: List[Dict]) -> Tuple[str, Optional[str]]:
     """
     Get switch name and substation code for lookup.
-    
+
     Args:
         switch: The switch object
         cb_alt_name_list: CB name mapping list
-        
+
     Returns:
         Tuple of (switch_name, substation_code)
     """
     # Check for name mapping
     for cb_dict in cb_alt_name_list:
-        if (cb_dict["SUBSTATION"] == switch.fold_id.loc_name and 
-            cb_dict["CB_NAME"] == switch.loc_name):
+        if (cb_dict["SUBSTATION"] == switch.fold_id.loc_name and
+                cb_dict["CB_NAME"] == switch.loc_name):
             pf_switch_name = cb_dict["NEW_NAME"]
             break
     else:
         pf_switch_name = switch.loc_name
-    
+
     # Extract base name (before underscore)
     switch_name = pf_switch_name.split("_")[0]
-    
+
     # Get substation code for ElmCoup switches
     if switch.GetClassName() == "ElmCoup":
         sub_code = switch.fold_id.loc_name
     else:
-        sub_code = switch_name
-    
+        sub_code = None
+
     return switch_name, sub_code
 
 
