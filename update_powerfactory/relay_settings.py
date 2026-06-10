@@ -178,6 +178,14 @@ def update_device_function(device_object: Any) -> None:
     if num_of_phases < 3:
         device_object.device = f"swer_{device_object.device}"
 
+    # Subtransmission relays are placed by element/cubicle and don't carry the
+    # distribution SWER/switch/sectionaliser semantics. Classifying them here
+    # would prefix the pattern (e.g. "switch_SOLKOR-RF_Energex"), which then
+    # misses both type_mapping.csv (-> "Mapping file not found" -> relay OOS)
+    # and the raw-name RELAYS_OOS check. Skip it for subtransmission devices.
+    if getattr(device_object, "subtransmission", False):
+        return
+
     # Determine whether the device is a switch or sectionaliser
     if not device_object.settings and device_object.device not in ["SOLKOR-RF_Energex"]:
         # No protection settings typically means it's a switch

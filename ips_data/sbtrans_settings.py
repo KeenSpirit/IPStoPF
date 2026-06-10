@@ -147,6 +147,11 @@ def _create_device(app, ips_dev, cubicle, used_names: Set[str]) -> ProtectionDev
     # (_switch_relay_oos) reads device.switch.on_off inside try/except
     # AttributeError, so None is safe.
     prot_dev.switch = None
+    # Explicit marker: subtransmission relays are placed by cubicle, not switch,
+    # and the SWER/switch/sectionaliser classification is distribution-only.
+    # Gated on in relay_settings.update_device_function. Use an explicit flag
+    # rather than `switch is None` because the Ergon path leaves .switch unset.
+    prot_dev.subtransmission = True
     prot_dev.seq_name = ips_dev.asset_name
 
     device_name = _relay_name(prot_dev, used_names)

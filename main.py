@@ -140,6 +140,7 @@ def main(app=None, batch=False):
                 data_capture_list: list[UpdateResult] = []
             else:
                 batch = True
+                region = "Ergon"    # This enables the inactive-record filter in _should_skip_record.
                 ee_grids = oag.regional_grid(app, selected_region)
                 grid = ui.select_object(ee_grids)
                 device_list, data_capture_list = ips_settings.get_ips_settings(app, region, batch, called_function, grid)
