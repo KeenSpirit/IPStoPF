@@ -73,117 +73,122 @@ def main(app=None, batch=False):
     # Enables the user to manually stop the script
     app.SetEnableUserBreak(1)
 
+    try:
+        # ======================================================================
+        # CONFIGURATION VALIDATION
+        # ======================================================================
+        # Validate configuration before doing anything else.
+        # This catches issues early with clear error messages rather than
+        # failing mid-run with cryptic stack traces.
 
-    # ==========================================================================
-    # CONFIGURATION VALIDATION
-    # ==========================================================================
-    # Validate configuration before doing anything else.
-    # This catches issues early with clear error messages rather than
-    # failing mid-run with cryptic stack traces.
-
-    if batch or called_function:
-        # Batch mode: stricter validation, check database connectivity
-        result = validate_for_batch_mode(app)
-        if not result.is_valid:
-            app.PrintError("Configuration validation failed for batch mode")
-            for error in result.errors:
-                app.PrintError(f"  {error}")
-            logger.error(f"Configuration validation failed: {result.errors}")
-            return None
-        # Print warnings but continue
-        for warning in result.warnings:
-            app.PrintWarn(warning)
-    else:
-        # Interactive mode: standard validation, faster startup
-        # require_valid_config() will exit automatically if invalid
-        require_valid_config(app)
-
-    # ==========================================================================
-    # MAIN PROCESSING
-    # ==========================================================================
-
-    # Determine which IPS database is to be queried
-    prjt = app.GetActiveProject()
-    if prjt is None:
-        app.PrintError("No active project selected. Activate a project to use this script")
-        logger.error("Script terminated because no active project was selected")
-        exit()
-    region = pf_utils.determine_region(prjt)
-
-    if region == "Subtransmission":
-        selected_region = ui.select_region()
-
-        if selected_region == "Energex":
-            # Obtain the IPS setting-ID data from the database (corporate cache query).
-            ips_records = qd.get_setting_id_records(app, ss.REGION)
-            ips = ii.ingest_ips_records(ips_records)
-
-            exg_grids_sorted = oag.all_egx_grids(app)
-            while True:
-                selected_grid = ui.select_object(exg_grids_sorted)
-                sites = []
-                sites.extend(pe.process_elements(app, selected_grid))
-                pf_result = pf_source.pf_refs_from_sites(sites)
-                pf_result = ui.select_pf_elements(pf_result)
-                if pf_result is ui.GO_BACK:
-                    continue
-                break
-            result = recon.reconcile(ips.by_key, pf_result)
-            # app.PrintPlain(result.coverage_summary())
-            # report_path = write_reconciliation_report(result, paths.get_output_directory())
-            # app.PrintPlain(f"Reconciliation report written to: {report_path}")
-
-            # --- apply matched settings to PowerFactory ---------------------------
-            set_ids, device_list = ss.build_devices_from_reconciliation(app, result)
-            app.PrintPlain(f"Built {len(device_list)} devices from {len(set_ids)} setting IDs")
-
-            data_capture_list: list[UpdateResult] = []
+        if batch or called_function:
+            # Batch mode: stricter validation, check database connectivity
+            result = validate_for_batch_mode(app)
+            if not result.is_valid:
+                app.PrintError("Configuration validation failed for batch mode")
+                for error in result.errors:
+                    app.PrintError(f"  {error}")
+                logger.error(f"Configuration validation failed: {result.errors}")
+                return None
+            # Print warnings but continue
+            for warning in result.warnings:
+                app.PrintWarn(warning)
         else:
-            batch = True
-            ee_grids = oag.regional_grid(app, selected_region)
-            grid = ui.select_object(ee_grids)
+            # Interactive mode: standard validation, faster startup
+            # require_valid_config() will exit automatically if invalid
+            require_valid_config(app)
+
+        # ======================================================================
+        # MAIN PROCESSING
+        # ======================================================================
+
+        # Determine which IPS database is to be queried
+        prjt = app.GetActiveProject()
+        if prjt is None:
+            app.PrintError("No active project selected. Activate a project to use this script")
+            logger.error("Script terminated because no active project was selected")
+            exit()
+        region = pf_utils.determine_region(prjt)
+
+        if region == "Subtransmission":
+            selected_region = ui.select_region()
+
+            if selected_region == "Energex":
+                # Obtain the IPS setting-ID data from the database (corporate cache query).
+                ips_records = qd.get_setting_id_records(app, ss.REGION)
+                ips = ii.ingest_ips_records(ips_records)
+
+                exg_grids_sorted = oag.all_egx_grids(app)
+                while True:
+                    selected_grid = ui.select_object(exg_grids_sorted)
+                    sites = []
+                    sites.extend(pe.process_elements(app, selected_grid))
+                    pf_result = pf_source.pf_refs_from_sites(sites)
+                    pf_result = ui.select_pf_elements(pf_result)
+                    if pf_result is ui.GO_BACK:
+                        continue
+                    break
+                result = recon.reconcile(ips.by_key, pf_result)
+                # app.PrintPlain(result.coverage_summary())
+                # report_path = write_reconciliation_report(result, paths.get_output_directory())
+                # app.PrintPlain(f"Reconciliation report written to: {report_path}")
+
+                # --- apply matched settings to PowerFactory -------------------
+                set_ids, device_list = ss.build_devices_from_reconciliation(app, result)
+                app.PrintPlain(f"Built {len(device_list)} devices from {len(set_ids)} setting IDs")
+
+                data_capture_list: list[UpdateResult] = []
+            else:
+                batch = True
+                ee_grids = oag.regional_grid(app, selected_region)
+                grid = ui.select_object(ee_grids)
+                device_list, data_capture_list = ips_settings.get_ips_settings(app, region, batch, called_function, grid)
+        else:
+            # Distribution model
+            # Query the IPS data
+            grid = None
             device_list, data_capture_list = ips_settings.get_ips_settings(app, region, batch, called_function, grid)
-    else:
-        # Distribution model
-        # Query the IPS data
-        grid = None
-        device_list, data_capture_list = ips_settings.get_ips_settings(app, region, batch, called_function, grid)
 
-        logger.info(f"Devices found in IPS: {len(device_list)}")
+            logger.info(f"Devices found in IPS: {len(device_list)}")
 
-    # Update PowerFactory
-    data_capture_list, has_updates = up.update_pf(app, device_list, data_capture_list)
+        # Update PowerFactory
+        data_capture_list, has_updates = up.update_pf(app, device_list, data_capture_list)
 
-    logger.info(f"Data capture list entries: {len(data_capture_list)}")
-    logger.info(f"Data capture list: {config_log_result(data_capture_list)}")
-    logger.info(f"Updates applied: {has_updates}")
+        logger.info(f"Data capture list entries: {len(data_capture_list)}")
+        logger.info(f"Data capture list: {config_log_result(data_capture_list)}")
+        logger.info(f"Updates applied: {has_updates}")
 
-    # Create file to save script information
-    save_file = create_save_file(app, prjt, called_function)
-    if not save_file:
-        return
-    write_dict_list_to_csv(data_capture_list, save_file)
+        # Create file to save script information
+        save_file = create_save_file(app, prjt, called_function)
+        if not save_file:
+            return
+        write_dict_list_to_csv(data_capture_list, save_file)
 
-    # Restore the echo
-    echo(app, off=False)
-    #if not batch:
-    print_results(app, data_capture_list)
+        # Restore the echo so the outcome messages below are visible.
+        echo(app, off=False)
+        #if not batch:
+        print_results(app, data_capture_list)
 
-    timer.stop()
-    stop_time = get_current_timestamp()
-    app.PrintInfo(
-        f"Script started at {start_time} and finished at {stop_time}"
-    )
-    if has_updates:
-        app.PrintInfo("Of the devices selected there were updated settings")
-        logger.info("Script completed with updated settings")
-    else:
-        app.PrintInfo("Of the devices selected there were no updated settings")
-        logger.info("Script completed with no updated settings")
+        stop_time = get_current_timestamp()
+        app.PrintInfo(
+            f"Script started at {start_time} and finished at {stop_time}"
+        )
+        if has_updates:
+            app.PrintInfo("Of the devices selected there were updated settings")
+            logger.info("Script completed with updated settings")
+        else:
+            app.PrintInfo("Of the devices selected there were no updated settings")
+            logger.info("Script completed with no updated settings")
 
-    app.PrintPlain(f"Query Script run time: {timer.formatted}")
-
-    return has_updates
+        return has_updates
+    finally:
+        # Always restore the echo and stop the timer, even on early return
+        # (e.g. batch "already studied"), on exit(), or on an exception.
+        # Restoring echo first ensures anything emitted here is visible;
+        # calling echo(off=False) a second time is harmless.
+        echo(app, off=False)
+        timer.stop()
+        app.PrintPlain(f"Query Script run time: {timer.formatted}")
 
 
 def echo(app, off=True):

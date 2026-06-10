@@ -71,7 +71,9 @@ def relay_settings(
     app,
     device_object: Any,
     relay_index: Union[RelayTypeIndex, List],
-    updates: bool
+    updates: bool,
+    ct_library: Optional[Any] = None,
+    vt_library: Optional[Any] = None,
 ) -> Tuple[UpdateResult, bool]:
     """
     Configure a relay device with settings from IPS.
@@ -142,9 +144,11 @@ def relay_settings(
         app, device_object.pf_obj, mapping_file, setting_dict, find_element
     )
 
-    # Update CT and VT settings
-    result = cs.update_ct(app, device_object, result)
-    result = vs.update_vt(app, device_object, result)
+    # Update CT and VT settings. The CT/VT library folders are resolved once
+    # per run by the orchestrator and threaded through here; passing None falls
+    # back to a per-call lookup (used by standalone callers and tests).
+    result = cs.update_ct(app, device_object, result, ct_library)
+    result = vs.update_vt(app, device_object, result, vt_library)
 
     return result, updates
 
@@ -371,12 +375,15 @@ def create_setting_dictionary(
 
                 if line[index] == "use_setting":
                     key = build_setting_key(line)
-                    # Apply unit conversions
-                    if setting[-1] in ["mA", "ms"]:
-                        setting[i] = float(setting[i]) / 1000
-                    elif setting[-1] in ["kA"]:
-                        setting[i] = float(setting[i]) * 1000
-                    setting_dictionary[key] = setting[i]
+                    # Apply unit conversions into a local; never mutate the row.
+                    unit = setting[-1]
+                    if unit in ("mA", "ms"):
+                        converted = float(value) / 1000
+                    elif unit == "kA":
+                        converted = float(value) * 1000
+                    else:
+                        converted = value
+                    setting_dictionary[key] = converted
                     continue
                 elif (
                     str(line[index]) != str(value)
@@ -581,6 +588,16 @@ def set_attribute(
                         return True
                 except ValueError:
                     # Set to maximum as last resort
+                    # Could not coerce the IPS value to a number. The previous
+                    # code wrote this sentinel silently; log it so a 9999 in the
+                    # model is traceable to a device + attribute.
+                    logger.warning(
+                        "set_attribute: could not convert %r for %s on %s; "
+                        "writing fallback 9999",
+                        setting_value,
+                        attribute,
+                        getattr(element, "loc_name", "?"),
+                    )
                     element.SetAttribute(attribute, 9999)
                     return updates
     else:

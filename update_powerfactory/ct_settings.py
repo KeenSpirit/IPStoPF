@@ -16,10 +16,28 @@ from utils.pf_utils import all_relevant_objects
 from core import UpdateResult
 
 
+def get_ct_library(app) -> Any:
+    """Find or create the local 'Current Transformers' library folder.
+
+    Resolving this folder is a full recursive walk of the local library, so it
+    is expensive. Resolve it once per run (orchestrator.update_pf) and pass it
+    into update_ct, rather than recomputing it for every device.
+    """
+    ct_library = all_relevant_objects(
+        app, [app.GetLocalLibrary()], "Current Transformers.IntFolder"
+    )
+    if not ct_library:
+        return app.GetLocalLibrary().CreateObject(
+            "IntFolder", "Current Transformers"
+        )
+    return ct_library[0]
+
+
 def update_ct(
         app,
         device_object: Any,
-        result: UpdateResult
+        result: UpdateResult,
+        ct_library: Optional[Any] = None,
 ) -> UpdateResult:
     """
     Update CT configuration for a protection device.
@@ -39,15 +57,8 @@ def update_ct(
     # At this point the script needs to update the appropriate primary and
     # secondary turns. This means that the type needs to contain the appropriate
     # attributes.
-    ct_library = all_relevant_objects(
-        app, [app.GetLocalLibrary()], "Current Transformers.IntFolder"
-    )
-    if not ct_library:
-        ct_library = app.GetLocalLibrary().CreateObject(
-            "IntFolder", "Current Transformers"
-        )
-    else:
-        ct_library = ct_library[0]
+    if ct_library is None:
+        ct_library = get_ct_library(app)
 
     if device_object.pf_obj.typ_id.fold_id.loc_name == "Reclosers":
         current_trans = update_ct_slots(app, device_object)

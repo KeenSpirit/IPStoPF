@@ -21,6 +21,8 @@ from typing import List, Dict, Tuple, Any, Union
 
 from update_powerfactory import relay_settings as rs
 from update_powerfactory import fuse_settings as fs
+from update_powerfactory import ct_settings as cs
+from update_powerfactory import vt_settings as vs
 from update_powerfactory.type_index import RelayTypeIndex, FuseTypeIndex
 from core import UpdateResult
 from config.relay_patterns import RELAYS_OOS
@@ -59,6 +61,13 @@ def update_pf(
 
     fuse_index = FuseTypeIndex.build(app)
 
+    # Resolve the CT/VT library folders ONCE for the whole run. Each lookup is a
+    # full recursive walk of the local library; doing it per device (as the old
+    # update_ct/update_vt did) meant ~2 walks per relay and was the cause of the
+    # long silent pause inside update_pf.
+    ct_library = cs.get_ct_library(app)
+    vt_library = vs.get_vt_library(app)
+
     updates = False
     results: List[UpdateResult] = []
 
@@ -88,7 +97,9 @@ def update_pf(
                     device_object,
                     relay_index,
                     fuse_index,
-                    updates
+                    updates,
+                    ct_library,
+                    vt_library,
                 )
             except Exception as e:
                 result = _handle_device_error(app, device_object, e)
@@ -117,7 +128,9 @@ def _process_device(
         device_object: Any,
         relay_index: RelayTypeIndex,
         fuse_index: FuseTypeIndex,
-        updates: bool
+        updates: bool,
+        ct_library: Any = None,
+        vt_library: Any = None,
 ) -> Tuple[UpdateResult, bool]:
     """
     Process a single device based on its type.
@@ -137,7 +150,8 @@ def _process_device(
     """
     if device_object.pf_obj.GetClassName() == "ElmRelay":
         return rs.relay_settings(
-            app, device_object, relay_index, updates
+            app, device_object, relay_index, updates,
+            ct_library, vt_library,
         )
     else:
         result = fs.fuse_setting(app, device_object, fuse_index)

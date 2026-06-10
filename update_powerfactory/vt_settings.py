@@ -21,10 +21,27 @@ from utils.pf_utils import all_relevant_objects
 from core import UpdateResult
 
 
+def get_vt_library(app) -> Any:
+    """Find or create the local 'Voltage Transformers' library folder.
+
+    Like get_ct_library, this is an expensive recursive library walk; resolve
+    it once per run and pass it into update_vt.
+    """
+    vt_library = all_relevant_objects(
+        app, [app.GetLocalLibrary()], "Voltage Transformers.IntFolder"
+    )
+    if not vt_library:
+        return app.GetLocalLibrary().CreateObject(
+            "IntFolder", "Voltage Transformers"
+        )
+    return vt_library[0]
+
+
 def update_vt(
         app,
         device_object: Any,
-        result: UpdateResult
+        result: UpdateResult,
+        vt_library: Optional[Any] = None,
 ) -> UpdateResult:
     """
     Update VT configuration for a protection device.
@@ -56,15 +73,8 @@ def update_vt(
 
     # VTs have a type, assign the library folder containing these types to a
     # variable.
-    vt_library = all_relevant_objects(
-        app, [app.GetLocalLibrary()], "Voltage Transformers.IntFolder"
-    )
-    if not vt_library:
-        vt_library = app.GetLocalLibrary().CreateObject(
-            "IntFolder", "Voltage Transformers"
-        )
-    else:
-        vt_library = vt_library[0]
+    if vt_library is None:
+        vt_library = get_vt_library(app)
 
     # Set up variables with the correct VT winding settings
     primary = int(float(device_object.vt_primary))
