@@ -62,6 +62,11 @@ def process_elements(app, selected_grid):
                 sites.append(site)
             add_element(site, nominal_kv, bus_element)
 
+    # One-shot terminal -> (site, voltage level) index so the obj-match calls
+    # below are O(1) instead of scanning every element on every call. Only
+    # busbars are matchable and all exist now, so this stays complete.
+    term_index = _build_obj_index(sites)
+
     app.PrintPlain("Parsing lines...")
     for line in lines:
         # Get name
@@ -72,12 +77,12 @@ def process_elements(app, selected_grid):
         cubicle_i = line.bus1
         if cubicle_i is not None:
             terminal_i = cubicle_i.cterm
-            result_i = add_element_by_obj_match(sites, terminal_i)
+            result_i = add_element_by_obj_match(sites, terminal_i, index=term_index)
         else: result_i = None
         cubicle_j = line.bus2
         if cubicle_j is not None:
             terminal_j = cubicle_j.cterm
-            result_j = add_element_by_obj_match(sites, terminal_j)
+            result_j = add_element_by_obj_match(sites, terminal_j, index=term_index)
         else: result_j = None
 
         # If both terminals match buses belonging to a single substation, this line is a bus coupler.
@@ -142,7 +147,7 @@ def process_elements(app, selected_grid):
             site = check_new_site(sites, new_site)
             add_element(site, nominal_kv, cap_bank_element)
         else:
-            result = add_element_by_obj_match(sites, cap_bank.bus1.cterm)
+            result = add_element_by_obj_match(sites, cap_bank.bus1.cterm, index=term_index)
             if result is not None:
                 result[1].add(cap_bank_element)
             else:
@@ -204,8 +209,8 @@ def process_elements(app, selected_grid):
             # Bus coupler (both terminals on one substation) or a feeder.
             terminal_i = cub_1.cterm if cub_1 is not None else None
             terminal_j = cub_2.cterm if cub_2 is not None else None
-            result_i = add_element_by_obj_match(sites, terminal_i)
-            result_j = add_element_by_obj_match(sites, terminal_j)
+            result_i = add_element_by_obj_match(sites, terminal_i, index=term_index)
+            result_j = add_element_by_obj_match(sites, terminal_j, index=term_index)
 
             if result_i is not None and result_j is not None and result_j[0] == result_i[0]:
                 name = s_raw_name
@@ -237,7 +242,7 @@ def process_elements(app, selected_grid):
         else:
             cub = switch.bus1
             if cub is not None:
-                result = add_element_by_obj_match(sites, cub.cterm)
+                result = add_element_by_obj_match(sites, cub.cterm, index=term_index)
                 if result is not None:
                     result[1].add(new_element)
                 else:
@@ -282,12 +287,12 @@ def process_elements(app, selected_grid):
             add_element(site, nominal_hv_kv, tfmr_hv_element)
             add_element(site, nominal_lv_kv, tfmr_lv_element)
         else:
-            result_hv = add_element_by_obj_match(sites, tr_2w.bushv.cterm)
+            result_hv = add_element_by_obj_match(sites, tr_2w.bushv.cterm, index=term_index)
             if result_hv is not None:
                 result_hv[1].add(tfmr_hv_element)
             else:
                 failed_matches.tfmrs.append(tr_2w)
-            result_lv = add_element_by_obj_match(sites, tr_2w.buslv.cterm)
+            result_lv = add_element_by_obj_match(sites, tr_2w.buslv.cterm, index=term_index)
             if result_lv is not None:
                 result_lv[1].add(tfmr_lv_element)
             else:
@@ -338,18 +343,18 @@ def process_elements(app, selected_grid):
             add_element(site, nominal_mv_kv, tfmr_mv_element)
             add_element(site, nominal_lv_kv, tfmr_lv_element)
         else:
-            result_hv = add_element_by_obj_match(sites, tr_3w.bushv.cterm)
+            result_hv = add_element_by_obj_match(sites, tr_3w.bushv.cterm, index=term_index)
             if result_hv is not None:
                 result_hv[1].add(tfmr_hv_element)
             else:
                 failed_matches.tfmrs.append(tr_3w)
-            result_mv = add_element_by_obj_match(sites, tr_3w.busmv.cterm)
+            result_mv = add_element_by_obj_match(sites, tr_3w.busmv.cterm, index=term_index)
             if result_mv is not None:
                 result_mv[1].add(tfmr_mv_element)
             else:
                 if tr_3w not in failed_matches.tfmrs:
                     failed_matches.tfmrs.append(tr_3w)
-            result_lv = add_element_by_obj_match(sites, tr_3w.buslv.cterm)
+            result_lv = add_element_by_obj_match(sites, tr_3w.buslv.cterm, index=term_index)
             if result_lv is not None:
                 result_lv[1].add(tfmr_lv_element)
             else:
@@ -394,18 +399,52 @@ def _iter_elements(substation: dc.Site):
             for el in by_name.values():
                 yield vl, el
 
+def _build_obj_index(substations, key=lambda o: o):
+    """Map element.obj -> (substation, voltage_level) for O(1) obj matching.
+
+    Built once after the busbar pass. Only busbar elements (whose .obj is a
+    terminal) can ever be matched by add_element_by_obj_match, and every busbar
+    is present by then, so the index is complete and stays valid for the rest of
+    process_elements. ``setdefault`` preserves first-match order, matching the
+    linear scan. Returns None if the objects aren't hashable, in which case
+    callers fall back to a linear scan.
+    """
+    try:
+        index = {}
+        for substation in substations:
+            for _vl, existing in _iter_elements(substation):
+                if existing.obj is not None:
+                    index.setdefault(key(existing.obj), (substation, _vl))
+        return index
+    except TypeError:
+        return None
+
 
 def add_element_by_obj_match(
     substations: list[dc.Site],
     obj_match: object,
     key=lambda o: o,
+    index=None,
 ) -> tuple[dc.Site, dc.VoltageLevel] | None:
     """Add `element` to the substation/voltage level that already contains an
     element named obj_match. Returns (substation, voltage_level) on success,
-    or None if no match was found (element not added)."""
+    or None if no match was found (element not added).
+    If ``index`` (from _build_obj_index) is provided it is consulted first for
+    an O(1) hit; on a miss it falls back to the original linear scan so the
+    result is identical to the pre-index code even if PowerFactory returns
+    unstable object wrappers."""
+
     if obj_match is None:
         return None
     target = key(obj_match)
+
+    if index is not None:
+        try:
+            hit = index.get(target)
+        except TypeError:
+            hit = None
+        if hit is not None:
+            return hit
 
     for substation in substations:
         for vl, existing in _iter_elements(substation):

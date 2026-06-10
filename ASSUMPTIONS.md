@@ -4,49 +4,126 @@ This document describes the architecture and high-level engineering assumptions 
 
 ## System Overview
 
-The system transfers protection device settings from the IPS (Intelligent Protection System) database to DIgSILENT PowerFactory network models. It supports both Energex (SEQ) and Ergon regional configurations.
+The system transfers protection device settings from the IPS (Intelligent Protection System) database to DIgSILENT PowerFactory network models. A single codebase serves both the **distribution** models (Energex and Ergon regions, matched by switch name) and the **subtransmission** model (33 kV and above, matched via a canonical mapping key). The entry point detects the model type from the active project and routes to the appropriate pipeline; both pipelines converge on the same settings-application machinery.
 
 ## Architectural Layers
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      Entry Point                             │
-│                      main.py                                │
-└─────────────────────────────┬───────────────────────────────┘
-                              │
-        ┌─────────────────────┼─────────────────────┐
-        │                     │                     │
-        ▼                     ▼                     ▼
-┌───────────────┐    ┌───────────────┐    ┌───────────────────┐
-│   ips_data/   │    │   devices.py  │    │update_powerfactory/│
-│ Data Retrieval│    │ Domain Model  │    │  Data Application │
-└───────┬───────┘    └───────┬───────┘    └─────────┬─────────┘
-        │                    │                      │
-        └────────────────────┼──────────────────────┘
-                             │
-              ┌──────────────┼──────────────┬───────────────┐
-              │              │              │               │
-              ▼              ▼              ▼               ▼
-        ┌─────────┐    ┌──────────┐   ┌─────────┐   ┌──────────────┐
-        │  core/  │    │  config/ │   │  utils/ │   │logging_config/│
-        │ Shared  │    │  Config  │   │ Utility │   │   Logging    │
-        │ Objects │    │ Settings │   │Functions│   │   System     │
-        └─────────┘    └──────────┘   └─────────┘   └──────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                          Entry Point                              │
+│                           main.py                                 │
+│        (model detection: distribution vs subtransmission)         │
+└────────────┬───────────────────────────────────┬─────────────────┘
+             │  distribution                     │  subtransmission
+             ▼                                   ▼
+   ┌──────────────────┐              ┌────────────────────────────┐
+   │    ips_data/     │              │  process_ips/   (IPS side) │
+   │  switch-name     │              │  process_pf_elements/ (PF) │
+   │  matching        │              │  mapping/  (reconcile)     │
+   └────────┬─────────┘              └──────────────┬─────────────┘
+            │                                       │
+            │              ┌────────────────────────┘
+            │              │  ips_data/sbtrans_settings.py
+            ▼              ▼  (ProtectionDevice builder)
+   ┌──────────────────────────────────────────────┐
+   │            update_powerfactory/               │
+   │      settings application (update_pf)         │
+   └──────────────────────┬───────────────────────┘
+                          │
+        ┌────────────┬────┴───────┬──────────────┬──────────────┐
+        ▼            ▼            ▼              ▼              ▼
+   ┌─────────┐ ┌─────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐
+   │  core/  │ │ domain/ │ │  config/ │ │  utils/  │ │logging_config/│
+   └─────────┘ └─────────┘ └──────────┘ └──────────┘ └──────────────┘
 ```
 
-### Dependency Flow
+### The Subtransmission Mapping Pipeline
 
 ```
-main.py
-    ├── ips_data/     ──┐
-    └── update_powerfactory/ ──┼── core/, config/, utils/, logging_config/
+IPS export / cache query          PowerFactory model
+        │                                │
+        ▼                                ▼
+process_ips.ips_ingest        process_pf_elements.process_elements
+  parse location path           walk model → Site/VoltageLevel/Element
+  scope rules                   resolve relay cubicles
+  normalise designation                  │
+        │                                ▼
+        │                     mapping.pf_source.pf_refs_from_sites
+        │                       normalise names (pf_normalise)
+        ▼                                ▼
+   IpsDevice records  ──────►  mapping.reconcile  ◄──  PfElementRef records
+   keyed by MappingKey            tiered join          keyed by MappingKey
+                                       │
+                                       ▼
+              ips_data.sbtrans_settings.build_devices_from_reconciliation
+                  find-or-create relay in matched cubicle
+                  batched detailed-settings fetch
+                                       │
+                                       ▼
+                  update_powerfactory.orchestrator.update_pf
 ```
+
+## The Canonical Join Key
+
+Both sides of the subtransmission pipeline normalise to the same key:
+
+```
+MappingKey = (site_code, voltage_kv, designation)
+```
+
+- **site_code** — the site in PowerFactory form. Substation numeric codes from IPS are translated via `config.region_config.get_substation_mapping` (a mapped value of `None` means the substation is intentionally skipped). Down Line Device X-site codes (e.g. `X12797-B`) pass through unchanged.
+- **voltage_kv** — the nominal voltage from the IPS location path (authoritative for line switches). Whole numbers are stored as `int` (`33`), fractional as `float` (`5.5`), and the literal `"LV"` is kept as a string. PowerFactory float voltages (`110.0`) are normalised to `int` so keys compare equal.
+- **designation** — the network-element operating designation per "Network element operating designations.txt" (e.g. `F3379`, `BB71`, `CB7X12`, `CP31`, `TR1`).
+
+### Designation Normalisation Assumptions
+
+- **Combined zones collapse to the first zone**: `BB11+BB12` → `BB11`, `F506A+B` → `F506A`. PowerFactory models zones as distinct elements, so a combined IPS designation maps to the first-listed element by convention. Whitespace around `+` is tolerated.
+- **NX↔TR synonym**: IPS names some transformer bays `NX<n>`; PowerFactory models them as `TR<n>`. The ingest bridges this so keys match exactly.
+- **Busbar duplicate suffixes are stripped**: PowerFactory duplicate terminals yield `BB31_1`; IPS has no suffix.
+- **Cap bank voltage digit**: the IPS designation is `CP(a)(b)` where `(a)` is a voltage digit (11→1, 33→3, 110→7, 132→8). Where the PowerFactory parser yields only the bank number (`CP2`), the digit is inserted from the element's voltage.
+- **Transformer breaker codes decode collectively**: `CB<v>T<tx><breaker>` decodes to `TR<tx>` with an A/B suffix (breaker digit 2→A, 1→B) only when the transformer number is seen on more than one breaker across the collection; a sole breaker gets no suffix.
+
+## Scope Assumptions (Subtransmission)
+
+- In-scope path categories: `Substations` and `Down Line Devices` only.
+- Down Line Devices below 33 kV (`SUBTRANSMISSION_MIN_KV`) are distribution assets and are excluded.
+- 11 kV feeders, 11 kV feeder switches, and 11 kV line switches at substations are excluded. Everything else — 33/110/132 kV feeders and switches, bus couplers, cap banks, transformer bays, and 11 kV transformer-LV / cap-bank / bus-coupler devices — is in scope.
+- Every excluded row is recorded with a typed `ExclusionReason` rather than silently dropped.
+
+## Reconciliation Assumptions
+
+`mapping.reconcile` joins IPS devices to PowerFactory elements with tiered matching:
+
+| Tier | Rule |
+|------|------|
+| `exact` | Identical `MappingKey` on both sides |
+| `lv_to_lowest_winding` | An IPS key with the literal `"LV"` voltage matches the same-named transformer at the site's lowest numeric voltage |
+| `coupler_base` | A cable-box coupler with a box suffix (`CB1X12A`) matches the base coupler (`CB1X12`) modelled in PowerFactory |
+| `cap_bank_voltage_digit` | Cap bank designation forms reconciled via the voltage digit |
+| `cap_bank_sole_device` | Last resort: a sole cap bank on each side at a site/voltage is assumed to be the same bank |
+
+Invariants:
+- Fallbacks never override an exact match and never reuse a PF element already claimed by one; every match records its tier.
+- **Substation-site filter**: IPS substation devices at sites PowerFactory does not model are *ignored* (counted separately), not reported as mismatches. Down Line Devices are exempt and surface as IPS-only. The filter can be disabled (`ignore_substations_absent_from_pf=False`).
+- **Breaker-bay preference**: when several elements at one (site, voltage) normalise to the same key, the transformer breaker bay is emitted ahead of the winding bays (`_EMIT_PRIORITY`) so `pf_by_key[key][0]` returns the breaker's cubicle.
+- Unmatched residue is preserved on both sides (`ips_only`, `pf_only`) for coverage reporting.
+
+## Pure / PowerFactory-Runtime Boundary
+
+A strict boundary is maintained so the matching logic is testable offline:
+
+| Pure (no PF dependency) | PF runtime |
+|--------------------------|------------|
+| `process_ips/` (ingest, records) | `process_pf_elements/process_elements.py` (model walk) |
+| `process_pf_elements/` name parsers and `pf_normalise.py` | `ips_data/sbtrans_settings.py` (relay find-or-create) |
+| `mapping/reconciliation.py` | `update_powerfactory/` (settings application) |
+| `mapping/pf_source.py` dataclasses | `ips_data/query_database.py` (IPS API) |
+
+`mapping.pf_source` provides two sources for the PF side: `pf_refs_from_sites` (production, live model — exact voltages and cubicles) and `pf_refs_from_workbook` (offline validation against `PowerFactory element data.xlsx` — best effort; undecodable rows are reported as skipped rather than guessed).
 
 ## Package Descriptions
 
-### core/ - Shared Domain Objects
-
-Contains domain objects shared between the data retrieval and application layers.
+### core/ — Shared Domain Objects
 
 | Module | Purpose |
 |--------|---------|
@@ -56,229 +133,61 @@ Contains domain objects shared between the data retrieval and application layers
 
 **Why it exists**: Prevents circular dependencies between `ips_data/` and `update_powerfactory/`.
 
-### config/ - Configuration Management
+### domain/ — Shared Join Vocabulary
 
-Centralizes all configuration, constants, and paths.
+Holds `MappingKey` / `VoltageKv` and the Site / VoltageLevel / Element / RelayCubicle data classes that `process_pf_elements` builds and `mapping` consumes.
+
+**Why it exists**: Both sides of the mapping pipeline (and the UI) need a common vocabulary without depending on each other.
+
+### config/ — Configuration Management
 
 | Module | Purpose |
 |--------|---------|
 | `paths.py` | Network paths, file locations, output directories |
 | `relay_patterns.py` | Relay classification (single-phase, multi-phase, OOS) |
-| `region_config.py` | Region-specific settings (substation mappings, suffix expansions) |
+| `region_config.py` | Substation code mappings, coupler base names, suffix expansions |
 | `validation.py` | Configuration validation at startup |
 
-**Why it exists**: Single source of truth for configuration. Easy to update paths when infrastructure changes.
+### process_ips/ — IPS Ingest
 
-### utils/ - Shared Utilities
+Parses each export row's location path (`<region>/<category>/<site>/<voltage>/<designation>/`), applies the scope rules, normalises voltage and designation, classifies the element type, and emits `IpsDevice` records keyed and indexed by `MappingKey`. Accepts either the offline CSV export or the dict rows returned by the corporate cache query (adapted to the same column layout).
 
-General-purpose utility functions used throughout the application.
+### process_pf_elements/ — PowerFactory Element Processing
 
-| Module | Purpose |
-|--------|---------|
-| `pf_utils.py` | PowerFactory-specific utilities (object retrieval, region detection) |
-| `file_utils.py` | File and CSV handling (read, write, path management) |
-| `time_utils.py` | Time formatting and performance measurement |
+`process_elements.py` walks the live model into Sites: terminals, couplers, lines, 2- and 3-winding transformers, and cap banks, decoding structured switch codes positionally (character 4 distinguishes cap bank / generator cubicle / transformer / coupler) and resolving each element's relay cubicle. The parsers and `pf_normalise.py` are pure string modules.
 
-**Why it exists**: Avoids code duplication and provides consistent interfaces.
+### mapping/ — Reconciliation
 
-### logging_config/ - Logging System
+Produces `PfElementRef`s (each carrying its live cubicle) and performs the tiered join described above, returning a `ReconciliationResult` with full statistics.
 
-Centralized, queue-based logging for thread-safe concurrent writes.
+### ips_data/ — Data Retrieval
 
-| Module | Purpose |
-|--------|---------|
-| `logging_utils.py` | Core logging setup with queue-based handler |
-| `configure_logging.py` | Device attribute logging helper |
+The distribution paths (`ex_settings`, `ee_settings`, `ips_settings`) are unchanged. `sbtrans_settings.build_devices_from_reconciliation` is the subtransmission analogue of `ex_all_dev_list`: because matching already happened upstream on the `MappingKey`, it builds the same `ProtectionDevice` objects but finds-or-creates each relay directly in the matched cubicle, then loads detailed settings and CT/VT attributes via a single `query_database.batch_settings` fetch. The device-construction recipe deliberately mirrors the distribution flow so everything downstream of `update_pf` behaves identically.
 
-**Key Features**:
-- Queue-based logging for thread-safe concurrent writes
-- Rotating file handler (10MB max, 5 backups)
-- JSON Lines format for machine parsing
-- Username injection into log records
-- External library log suppression (netdash, assetclasses, etc.)
+### update_powerfactory/ — Settings Application
 
-**Log File Location**: `{project_root}/results_log/ips_to_pf.log`
+Unchanged in role. Notable mechanisms:
 
-**Usage restricted to**: `main.py`, `orchestrator.py`, `query_database.py`
+- **Relay type association**: a bare `ElmRelay` is created if absent, then `check_relay_type` assigns `typ_id` via `RelayTypeIndex.get()`, which matches the column-E type name against library `loc_name` exactly (character-for-character).
+- **CT-secondary variant selection** (`mapping_file.py`): the type-mapping cache is `{pattern: {ct_key: (mapping_file, relay_type)}}`. CT keys normalise so `"5"`, `"5.0"`, and `5` match. Selection falls back deterministically (None-keyed variant → 1 A variant → lowest key) when the device's CT secondary is unknown.
+- **Exclusion flags**: column B of `type_mapping.csv` is the single source of truth for excluded patterns (the former `EXCLUDED_PATTERNS` constant is retired). Matching remains a substring check.
+- **Type association is independent of settings files**: a missing settings mapping file does not suppress relay type association (`read_mapping_file` returns `(None, relay_type)`).
+- **Encoding tolerance**: `type_mapping.csv` is read as UTF-8 with a CP1252 fallback, since Excel-exported files commonly contain non-ASCII characters.
 
-### ips_data/ - Data Retrieval Layer
+### ui/ — User Interface
 
-Handles all interactions with the IPS database.
+| Function | Purpose |
+|----------|---------|
+| `select_region` | Radio-button region picker (South East → `"Energex"`, regional grids → two-letter codes) |
+| `select_object` | Generic single-object picker (e.g. grid selection) |
+| `select_pf_elements` | Substation → voltage → element checkbox tree with tri-state parents, Select All, and a **Back** button that returns the `GO_BACK` sentinel so `main.py` can loop back to grid selection |
+| `DeviceSelection` dialog | Distribution device picker (unchanged) |
 
-| Module | Purpose |
-|--------|---------|
-| `query_database.py` | IPS database queries via NetDash API |
-| `setting_index.py` | Indexed data structures for O(1) lookups |
-| `cb_mapping.py` | CB alternate name lookups |
-| `ee_settings.py` | Ergon region-specific processing |
-| `ex_settings.py` | Energex region-specific processing |
-| `ips_settings.py` | Main orchestration for IPS data retrieval |
-
-**Key Design Decision**: This layer does NOT depend on `update_powerfactory/`. All shared objects come from `core/`.
-
-### update_powerfactory/ - Data Application Layer
-
-Applies retrieved settings to PowerFactory models.
-
-| Module | Purpose |
-|--------|---------|
-| `orchestrator.py` | Main update orchestration |
-| `relay_settings.py` | Relay device configuration |
-| `relay_reclosing.py` | Reclosing logic configuration |
-| `relay_logic_elements.py` | Dip switch configuration |
-| `fuse_settings.py` | Fuse device configuration |
-| `ct_settings.py` | Current transformer configuration |
-| `vt_settings.py` | Voltage transformer configuration |
-| `mapping_file.py` | Settings mapping file handling |
-| `type_index.py` | Relay/fuse type indexes for O(1) lookups |
-
-## Data Flow
-
-```
-1. User starts script (main.py)
-   └── setup_logging() initializes logging system
-        │
-        ▼
-2. Validate configuration
-   (config/validation.py)
-        │
-        ▼
-3. Determine region from project structure
-        │
-        ▼
-4. Query IPS database for setting IDs
-   (ips_data/query_database.py)
-   └── Logs: index creation, retry attempts
-        │
-        ▼
-5. Build indexed lookups
-   (ips_data/setting_index.py)
-        │
-        ▼
-6. Match PF devices to IPS records
-   (ips_data/ee_settings.py or ex_settings.py)
-        │
-        ▼
-7. Create ProtectionDevice objects
-   (core/protection_device.py)
-        │
-        ▼
-8. Update PowerFactory models
-   (update_powerfactory/orchestrator.py)
-   └── Logs: type index build, errors, completion
-        │
-        ▼
-9. Generate results CSV
-   (main.py)
-   └── Logs: script completion
-```
-
-## Key Design Patterns
-
-### 1. Indexed Lookups (O(1) Performance)
-
-The `SettingIndex` class pre-processes raw IPS data into dictionaries keyed by various attributes:
-
-```python
-class SettingIndex:
-    by_asset_name: Dict[str, List[SettingRecord]]
-    by_switch_name: Dict[str, List[SettingRecord]]
-    by_setting_id: Dict[str, SettingRecord]
-```
-
-This reduces lookup complexity from O(n) to O(1).
-
-### 2. Factory Methods for Result Creation
-
-`UpdateResult` uses factory methods for common scenarios:
-
-```python
-result = UpdateResult.from_device(device)
-result = UpdateResult.not_in_ips(device)
-result = UpdateResult.script_failed(device, error)
-result = UpdateResult.info_record(pf_device, message)
-```
-
-### 3. Caching
-
-Several components cache data after first load:
-- `SettingIndex`: Cached by region
-- `RelayTypeIndex` / `FuseTypeIndex`: Built once per update run
-- CB alternate names: Cached in `cb_mapping.py`
-- Mapping files: Cached in `mapping_file.py`
-
-### 4. Queue-Based Logging
-
-The logging system uses Python's `QueueHandler` and `QueueListener` for thread-safe writes:
-
-```python
-from logging_config import setup_logging, get_logger
-
-setup_logging()  # Initialize once at startup
-logger = get_logger(__name__)
-
-logger.info("Message")  # Thread-safe, non-blocking
-```
-
-## Region-Specific Processing
-
-### Energex (SEQ)
-
-- Uses switch names to match IPS records
-- Handles double cable box configurations (A+B, A+B+C)
-- CB alternate name lookups for non-standard names
-- The index handles double cable box expansion (e.g., "NIP1A+B" is indexed under both "NIP1A" and "NIP1B")
-
-### Ergon
-
-- Uses plant numbers extracted from device names
-- Different relay pattern conventions
-- Separate settings processing logic
-
-## Mapping Files Structure
-
-All mapping files are stored in the project root under `mapping_files/`:
-
-```
-mapping_files/
-├── cb_alt_names/           # CB alternate name mappings
-│   └── CB_ALT_NAME.csv     # Maps PF CB names to IPS names
-├── curve_mapping/          # IDMT curve mappings
-│   └── curve_mapping.csv   # Maps IPS curve codes to PF curve names
-├── relay_maps/             # Relay pattern mapping files
-│   └── *.csv               # Individual relay pattern mappings
-└── type_mapping/           # Type mapping configuration
-    └── type_mapping.csv    # Maps IPS patterns to PF types + mapping files
-```
-
-### Path Configuration
-
-Paths are configured in `config/paths.py`:
-
-```python
-PROJECT_ROOT = Path(__file__).parent.parent
-
-MAPPING_FILES_BASE = PROJECT_ROOT / "mapping_files"
-CB_ALT_NAMES_DIR = MAPPING_FILES_BASE / "cb_alt_names"
-CURVE_MAPPING_DIR = MAPPING_FILES_BASE / "curve_mapping"
-RELAY_MAPS_DIR = MAPPING_FILES_BASE / "relay_maps"
-TYPE_MAPPING_DIR = MAPPING_FILES_BASE / "type_mapping"
-```
-
-### Helper Functions
-
-```python
-from config.paths import (
-    get_cb_alt_name_file,    # Returns path to CB_ALT_NAME.csv
-    get_curve_mapping_file,  # Returns path to curve_mapping.csv
-    get_type_mapping_file,   # Returns path to type_mapping.csv
-    get_relay_map_file,      # Returns path to specific relay map file
-)
-```
+Window sizing is DPI-invariant (Win32 work-area fraction applied to Tk's screen height) and capped to the usable screen before growing a scrollbar.
 
 ## Configuration Validation
 
-The `config/validation.py` module provides comprehensive configuration validation at startup. This catches configuration issues early with clear error messages rather than failing mid-run with cryptic stack traces.
+Configuration is validated at startup, catching issues early with clear error messages rather than failing mid-run.
 
 ### Validation Levels
 
@@ -289,89 +198,50 @@ The `config/validation.py` module provides comprehensive configuration validatio
 | `FULL` | All above + PowerFactory environment | Production use |
 | `STRICT` | All above + warnings become errors | Critical batch jobs |
 
-### Usage
-
-```python
-from config.validation import require_valid_config
-
-def main(app=None, batch=False):
-    if not app:
-        app = pf.GetApplication()
-    
-    # Validate configuration - exits automatically if invalid
-    require_valid_config(app)
-    
-    # ... rest of script (only runs if config is valid)
-```
-
-### What Gets Validated
-
-**Paths**: SCRIPTS_BASE, MAPPING_FILES_DIR, OUTPUT_BATCH_DIR, OUTPUT_LOCAL_DIR, library paths
-
+**Paths**: SCRIPTS_BASE, mapping directories, output directories, library paths
 **Required Files**: type_mapping.csv, CB_ALT_NAME.csv
-
 **Optional Files**: curve_mapping.csv
-
 **External Libraries**: netdashread, assetclasses
-
-**PowerFactory (Full level)**: Active project, required folders (netmod, netdat, equip), libraries
+**PowerFactory (Full level)**: active project, required folders (netmod, netdat, equip), libraries
 
 ## Error Handling Assumptions
 
 - All update operations return `UpdateResult` objects
 - Errors are captured but don't stop batch processing
+- Ingest exclusions and reconciliation residue are recorded, not raised
 - Results are written to CSV for review
 - Logging in `orchestrator.py` captures exceptions with full device attributes
 
 ## Performance Assumptions
 
-1. **Batch Mode Write Caching**: PowerFactory write cache enabled during batch updates
-2. **Progress Reporting**: Every 10 devices to avoid UI freeze
-3. **Lazy Loading**: Mapping files loaded only when needed
-4. **Index Pre-computation**: Indexes built once, used for all lookups
-5. **Queue-Based Logging**: Non-blocking log writes for better performance
+1. **Batched settings fetch**: a single `batch_settings` call covers every matched setting ID (subtransmission) or device list (distribution)
+2. **Hoisted CT/VT library lookups**: CT/VT library scans are performed once per run, not per device — per-device recursive scans were the dominant cost (~600+ redundant scans for ~300 devices)
+3. **Index pre-computation**: relay/fuse type indexes and setting indexes built once
+4. **Mapping file caching**: type, curve, and relay mapping files cached after first read
+5. **Batch mode write caching**: PowerFactory write cache enabled during batch updates
+6. **Queue-based logging**: non-blocking log writes
 
 ## Logging Architecture
 
-### Log Format
-
-JSON Lines format - each line is a self-contained JSON object:
+JSON Lines format — each line is a self-contained JSON object:
 
 ```json
 {"timestamp": "2024-01-15T10:30:45+00:00", "name": "module_name", "level": "INFO", "username": "user", "message": "Message text"}
 ```
 
-### What Gets Logged
-
 | Location | What is Logged |
 |----------|----------------|
-| `main.py` | Script start/end, overall timing |
+| `main.py` | Script start/end, model/region routing, overall timing |
 | `query_database.py` | Index creation, retry attempts, batch progress |
 | `orchestrator.py` | Type index build, device errors, completion summary |
 
-### Rotation Policy
-
-- Maximum file size: 10MB
-- Backup count: 5 files
-- Oldest logs automatically deleted
+Rotation: 10MB max file size, 5 backups, oldest deleted automatically.
 
 ## Key Engineering Assumptions
 
 1. **Network Accessibility**: Network paths (`\\ecasd01\WksMgmt\PowerFactory`) must be accessible from the machine running the script
-
-2. **PowerFactory Environment**: Script runs within the PowerFactory Python environment with access to the `powerfactory` module
-
-3. **IPS Database**: NetDash API is available and the IPS database is accessible
-
-4. **Device Matching**: 
-   - Energex uses switch names for matching
-   - Ergon uses plant numbers for matching
-   - Devices with identical attributes but different switches are allowed by design
-
-5. **Double Cable Box Handling**: The same setting record may create multiple device objects if it protects multiple switches (e.g., "NIP1A+B" creates devices for both switch "NIP1A" and switch "NIP1B")
-
-6. **Region Detection**: Region (Energex vs Ergon) is automatically detected from the PowerFactory project structure
-
-7. **Mapping File Format**: All mapping files are CSV format with specific column structures
-
-8. **Citrix Environment**: Local fallback paths are used when network locations are unavailable (Citrix environment)
+2. **PowerFactory Environment**: The update stages run within the PowerFactory Python environment; console output requires `app.PrintPlain()` (bare `print()` is suppressed, and `PrintInfo` is suppressed while `echo(app)` is active)
+3. **IPS Database**: The NetDash API is available and the IPS database is accessible; the subtransmission dataset is the Energex (EX) report
+4. **Naming Conventions Hold**: The mapping relies on the operating-designation conventions documented in "Network element operating designations.txt"; elements with generic or unstructured names (e.g. `Breaker/Switch`, short codes like `MTC`) cannot be keyed and are reported as failed matches
+5. **`StaCubic` contents require `.GetContents()`**: iterating a `StaCubic` DataObject directly raises `TypeError`
+6. **Library type names are exact**: column E of `type_mapping.csv` must match the PowerFactory library type `loc_name` character-for-character
