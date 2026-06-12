@@ -335,8 +335,8 @@ def select_pf_elements(pf_result):
         ``skipped`` list is carried through unchanged). "Exit Application" (or
         closing the window) terminates the program, matching select_object.
     """
-    # Local import keeps ui decoupled at module load time and avoids any
-    # import-order surprises; mapping.pf_source does not import ui.
+    # Local import keeps user_interface decoupled at module load time and avoids any
+    # import-order surprises; mapping.pf_source does not import user_interface.
     from mapping.pf_source import PfSourceResult
 
     refs = list(pf_result.refs)

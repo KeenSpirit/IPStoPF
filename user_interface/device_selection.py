@@ -10,7 +10,7 @@ The dialog organizes devices by substation and feeder, allowing
 users to select at any level of the hierarchy.
 
 Usage:
-    from ui.device_selection import user_selection
+    from user_interface.device_selection import user_selection
 
     # Show dialog and get user selections
     selections = user_selection(app, device_dict)
@@ -26,7 +26,7 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Dict, List, Optional, Any, Union
 
-from ui.constants import (
+from user_interface.constants import (
     WINDOW_TITLE,
     WINDOW_Y_OFFSET,
     WINDOW_TOPMOST,
@@ -45,8 +45,8 @@ from ui.constants import (
     PADDING_CHECKBOX_FEEDER,
     PADDING_CHECKBOX_DEVICE,
 )
-from ui.widgets import VerticalScrolledFrame
-from ui.utils import (
+from user_interface.widgets import VerticalScrolledFrame
+from user_interface.utils import (
     center_window,
     bind_dialog_keys,
     set_window_topmost,

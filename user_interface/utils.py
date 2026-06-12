@@ -9,7 +9,7 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Tuple, Optional, Callable, Any
 
-from ui.constants import (
+from user_interface.constants import (
     BUTTON_OK,
     BUTTON_CANCEL,
     PADDING_BUTTON,

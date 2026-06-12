@@ -27,7 +27,7 @@ from ips_data import ex_settings as ex
 from ips_data import add_subtrans_prot_relay_skele as asprs
 from ips_data.setting_index import SettingIndex
 from utils.pf_utils import get_all_protection_devices
-from ui.device_selection import user_selection
+from user_interface.device_selection import user_selection
 
 reload(ex)
 reload(asprs)

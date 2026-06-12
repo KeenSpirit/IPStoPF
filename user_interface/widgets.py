@@ -12,7 +12,7 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Optional
 
-from ui.constants import SCROLL_FRAME_HEIGHT
+from user_interface.constants import SCROLL_FRAME_HEIGHT
 
 
 class VerticalScrolledFrame(ttk.Frame):
