@@ -171,13 +171,13 @@ class ProtectionDevice:
                 if not row.setting:
                     continue
                 try:
-                    if "CT Primary" in row.nameenu:
+                    if "CT Primary" in row.paramnameenu:
                         self.ct_primary = int(float(row.setting))
-                    elif "CT Secondary" in row.nameenu:
+                    elif "CT Secondary" in row.paramnameenu:
                         self.ct_secondary = int(float(row.setting))
-                    elif "VT Primary" in row.nameenu:
+                    elif "VT Primary" in row.paramnameenu:
                         self.vt_primary = int(float(row.setting))
-                    elif "VT Secondary" in row.nameenu:
+                    elif "VT Secondary" in row.paramnameenu:
                         self.vt_secondary = int(float(row.setting))
                 except (ValueError, TypeError, AttributeError):
                     pass
