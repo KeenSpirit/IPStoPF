@@ -111,6 +111,15 @@ def main(app=None, batch=False):
         region = pf_utils.determine_region(prjt)
 
         if region == "Subtransmission":
+            # Subtransmission requires the region/grid/element selection dialogs,
+            # so it is interactive-only. A batch/called invocation (e.g.
+            # IPStoPFMastering) bypasses the UI and must never enter this branch.
+            if called_function:
+                app.PrintPlain(
+                    "Subtransmission model skipped: interactive-only, not run in batch."
+                )
+                logger.info("Subtransmission project skipped (called_function mode)")
+                return
             selected_region = ui.select_region()
 
             if selected_region == "Energex":

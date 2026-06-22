@@ -13,6 +13,7 @@ setting data instead of linear scans through lists.
 
 import sys
 import time
+from contextlib import closing
 from typing import Dict, List, Tuple
 
 # Import paths from config and add to sys.path
@@ -26,6 +27,7 @@ sys.path.append(ASSET_CLASSES_PATH)
 import assetclasses
 from assetclasses.corporate_data import get_cached_data
 
+from ips_data import ods_connection
 from ips_data.setting_index import SettingIndex, create_setting_index
 from logging_config import get_logger
 
@@ -202,13 +204,21 @@ def batch_settings(
     """
     Retrieve detailed settings for a batch of relay setting IDs.
 
-    This function fetches the complete setting details for each setting ID
-    and also retrieves associated instrument transformer settings.
+    In batch mode the relay setting files are fetched from the Oracle ODS in a
+    single query per <=1000-id chunk, bypassing NetDash. If a direct ODS
+    connection cannot be established (no Oracle client, no credential file, or
+    the database is unreachable), the fetch falls back to the NetDash per-ID
+    path so callers without ODS access - e.g. an interactive subtransmission
+    run - still complete, just more slowly. Errors raised after a connection is
+    open (a failed query) are NOT caught here and propagate normally.
+
+    In interactive distribution runs the relay settings are loaded eagerly per
+    device elsewhere, so this function returns only the IT settings.
 
     Args:
         app: PowerFactory application object
         region: "Energex" or "Ergon"
-        batch: True if called from batch update (loads all settings)
+        batch: True if the relay settings should be bulk-loaded here
         set_ids: List of relay setting IDs to fetch
 
     Returns:
@@ -218,20 +228,184 @@ def batch_settings(
     """
     ips_settings: Dict[str, List[Dict]] = {}
 
-    if region == "Energex":
-        if batch:
-            ips_settings = _fetch_settings_in_batches(
-                app, set_ids, seq_get_ips_settings, batch_size=900
+    if batch:
+        sql = ENERGEX_BATCH_SQL if region == "Energex" else ERGON_BATCH_SQL
+        # Energex filters empty settings in SQL (relayparam.actual IS NOT NULL);
+        # Ergon filters them in Python, mirroring the legacy behaviour.
+        skip_empty = region != "Energex"
+        fetch_func = (
+            seq_get_ips_settings if region == "Energex" else reg_get_ips_settings
+        )
+        try:
+            with closing(ods_connection.connect_to_db(region)) as connection:
+                ips_settings = batch_get_ips_settings(
+                    connection, set_ids, sql, skip_empty_setting=skip_empty
+                )
+        except ods_connection.ODSUnavailable as exc:
+            # Connection-level failure only - query errors propagate. Fall back
+            # to the NetDash per-ID fetch so the run still completes.
+            logger.warning(
+                f"ODS bulk fetch unavailable ({exc}); falling back to NetDash "
+                f"per-ID fetch for {len(set_ids)} setting IDs"
             )
+            ips_settings = _fetch_settings_in_batches(app, set_ids, fetch_func)
+
+    if region == "Energex":
         ips_it_settings = seq_get_ips_it_details(app, set_ids)
     else:
-        if batch:
-            ips_settings = _fetch_settings_in_batches(
-                app, set_ids, reg_get_ips_settings, batch_size=900
-            )
         ips_it_settings = reg_get_ips_it_details(app, set_ids)
 
     return ips_settings, ips_it_settings
+
+# ---------------------------------------------------------------------------
+# Direct-ODS batch settings retrieval (bypasses NetDash)
+#
+# NetDash filters one setting ID per request. With a privileged ODS connection
+# we filter on the whole list in a single statement, chunked under Oracle's
+# 1000-element IN-list limit. Returns the same {set_id: [records]} shape as the
+# per-ID seq_get_ips_settings / reg_get_ips_settings functions, so it drops
+# straight into the existing ips_settings structure.
+# ---------------------------------------------------------------------------
+
+_BATCH_COLS = [
+    "blockpathenu",
+    "paramnameenu",
+    "proposedsetting",
+    "unitenu",
+    "relaysettingid",
+]
+
+_ORACLE_IN_LIMIT = 1000
+
+# Transcribed from the legacy ips_to_pf.batch_seq_get_ips_settings.
+# Whitespace reformatted; joins/filters preserved. Verify against original.
+ENERGEX_BATCH_SQL = """
+SELECT
+    relparblock.blockpathenu, relparmodel.paramnameenu,
+    CASE
+        WHEN relparmodel.datatype = 'Enum'
+        THEN CAST(relparenumitem.textenu AS NVARCHAR2(2000))
+        ELSE CAST(relayparam.actual AS NVARCHAR2(2000))
+    END AS proposedsetting, relparmodel.unitenu, relaysetting.relaysettingid
+FROM
+    edw_ldg_owner.ips_relparblock relparblock_2
+    INNER JOIN edw_ldg_owner.ips_relparblock relparblock_1 ON
+        relparblock_2.relparblockid = relparblock_1.parentrowid
+    RIGHT OUTER JOIN (
+        edw_ldg_owner.ips_relayparam relayparam
+        INNER JOIN edw_ldg_owner.ips_relayparamset relayparamset ON
+            relayparam.relayparamsetid = relayparamset.relayparamsetid
+        INNER JOIN edw_ldg_owner.ips_relaysetting relaysetting ON
+            relayparamset.relaysettingid = relaysetting.relaysettingid
+        INNER JOIN edw_ldg_owner.ips_relparmodel relparmodel ON
+            relayparam.relparmodelid = relparmodel.relparmodelid
+        INNER JOIN edw_ldg_owner.ips_relparblock relparblock ON
+            relparmodel.relparblockid = relparblock.relparblockid
+        INNER JOIN edw_ldg_owner.ips_mntasset mntasset ON
+            relaysetting.assetid = mntasset.assetid
+        LEFT OUTER JOIN edw_ldg_owner.ips_relparenumitem relparenumitem ON
+            relayparam.actual = relparenumitem.relparenumitemid
+        LEFT OUTER JOIN edw_ldg_owner.ips_relparenum relparenum ON
+            relparmodel.relparenumid = relparenum.relparenumid
+    ) ON relparblock_1.relparblockid = relparblock.parentrowid
+WHERE relaysetting.relaysettingid IN ({in_clause})
+    AND relayparam.actual IS NOT NULL
+ORDER BY relaysetting.assetid
+"""
+
+# Transcribed from the legacy ips_to_pf.batch_reg_get_ips_settings.
+# Whitespace reformatted; joins/filters preserved. Verify against original.
+ERGON_BATCH_SQL = """
+SELECT  relparblock.blockpathenu,
+        RelParModel.ParamNameENU,
+        CASE
+            WHEN RelParModel.DataType = 'Enum' THEN RelParEnumItem.TextENU
+            ELSE RelayParam.Actual
+        END AS ProposedSetting,
+        RelParModel.UnitENU,
+        RelaySetting.RelaySettingID
+FROM    EDW_LDG_OWNER.IPS_RelParBlock RelParBlock_2
+        INNER JOIN EDW_LDG_OWNER.IPS_RelParBlock RelParBlock_1 ON
+            RelParBlock_2.RelParBlockID = RelParBlock_1.ParentRowID
+        RIGHT OUTER JOIN (
+            EDW_LDG_OWNER.IPS_RelayParam RelayParam
+            INNER JOIN EDW_LDG_OWNER.IPS_RelayParamSet RelayParamSet ON
+                RelayParam.RelayParamSetID = RelayParamSet.RelayParamSetID
+            INNER JOIN EDW_LDG_OWNER.IPS_RelaySetting RelaySetting ON
+                RelayParamSet.RelaySettingID = RelaySetting.RelaySettingID
+            INNER JOIN EDW_LDG_OWNER.IPS_RelParModel RelParModel ON
+                RelayParam.RelParModelID = RelParModel.RelParModelID
+            INNER JOIN EDW_LDG_OWNER.IPS_RelParBlock RelParBlock ON
+                RelParModel.RelParBlockID = RelParBlock.RelParBlockID
+            INNER JOIN EDW_LDG_OWNER.IPS_MntAsset MntAsset ON
+                RelaySetting.AssetID = MntAsset.AssetId
+            LEFT OUTER JOIN EDW_LDG_OWNER.IPS_RelParEnumItem RelParEnumItem ON
+                RelayParam.Actual = RelParEnumItem.RelParEnumItemID
+            LEFT OUTER JOIN EDW_LDG_OWNER.IPS_RelParEnum RelParEnum ON
+                RelParModel.RelParEnumID = RelParEnum.RelParEnumID
+        ) ON RelParBlock_1.RelParBlockID = RelParBlock.ParentRowID
+WHERE RelaySetting.RelaySettingID IN ({in_clause})
+ORDER BY RelaySetting.AssetID
+"""
+
+
+def _chunked(items: List, size: int):
+    """Yield successive sub-lists of at most ``size`` items."""
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
+
+
+def batch_get_ips_settings(
+    connection,
+    unique_ids: List[str],
+    sql: str,
+    *,
+    skip_empty_setting: bool,
+) -> Dict[str, List[Dict]]:
+    """
+    Bulk-fetch relay setting files from the ODS, one query per chunk.
+
+    Uses named bind variables rather than string-concatenated literals (the
+    legacy approach), which removes the injection/quoting hazard and is the
+    correct Oracle idiom. The ID list is chunked under the 1000-element
+    IN-list limit.
+
+    Args:
+        connection: open cx_Oracle connection (ods_connection.connect_to_db)
+        unique_ids: relay setting IDs to fetch
+        sql: region SQL template containing a single ``{in_clause}`` token
+        skip_empty_setting: drop rows whose proposedsetting is empty (Ergon)
+
+    Returns:
+        {setting_id: [ {blockpathenu, paramnameenu, proposedsetting,
+                        unitenu, relaysettingid}, ... ], ... }
+        Every requested ID is present as a key, even with no rows.
+    """
+    setting_id_dict: Dict[str, List[Dict]] = {sid: [] for sid in unique_ids}
+
+    cursor = connection.cursor()
+    try:
+        for chunk in _chunked(unique_ids, _ORACLE_IN_LIMIT):
+            binds = {f"id{i}": sid for i, sid in enumerate(chunk)}
+            in_clause = ", ".join(f":{name}" for name in binds)
+            cursor.execute(sql.replace("{in_clause}", in_clause), binds)
+            for row in cursor:
+                record = dict(zip(_BATCH_COLS, row))
+                if skip_empty_setting and not record["proposedsetting"]:
+                    continue
+                # Assumes the ODS returns relaysettingid in the same form as the
+                # IDs in unique_ids (as the legacy code did). If a KeyError ever
+                # surfaces here, a str() coercion on both sides is the fix.
+                setting_id_dict[record["relaysettingid"]].append(record)
+    finally:
+        cursor.close()
+
+    n_chunks = (len(unique_ids) + _ORACLE_IN_LIMIT - 1) // _ORACLE_IN_LIMIT
+    logger.info(
+        f"ODS batch fetch: {len(unique_ids)} setting IDs in "
+        f"{n_chunks} query(ies)"
+    )
+    return setting_id_dict
 
 
 def _fetch_settings_in_batches(
@@ -241,16 +415,23 @@ def _fetch_settings_in_batches(
     batch_size: int = 900
 ) -> Dict[str, List[Dict]]:
     """
-    Fetch settings in batches to avoid overwhelming the API.
+    Fetch settings one ID at a time via NetDash, combining the results.
+
+    This is the per-ID fallback used when a direct ODS connection is not
+    available. ``fetch_func`` is the region's single-ID fetch
+    (``seq_get_ips_settings`` or ``reg_get_ips_settings``), each of which
+    returns a ``{set_id: [records]}`` dict; the results are merged into one
+    dict. ``batch_size`` only controls how often progress is logged, not the
+    query - NetDash takes one ID per call, so this is one round trip per ID.
 
     Args:
         app: PowerFactory application object
         set_ids: List of setting IDs to fetch
-        fetch_func: Function to call for each setting ID
-        batch_size: Maximum IDs to process before yielding
+        fetch_func: Per-ID fetch function returning {set_id: [records]}
+        batch_size: How many IDs between progress log lines
 
     Returns:
-        Combined dictionary of all settings
+        Combined dictionary of all settings, keyed by setting ID
     """
     ips_settings: Dict[str, List[Dict]] = {}
 
