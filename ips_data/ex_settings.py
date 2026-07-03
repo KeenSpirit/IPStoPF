@@ -12,11 +12,14 @@ linear scans through the settings list.
 
 from typing import Dict, List, Optional, Tuple, Set, Any
 
-from core import ProtectionDevice, SettingRecord
+from core import ProtectionDevice, SettingRecord, UpdateResult
 from ips_data import query_database as qd
 from ips_data.cb_mapping import get_cb_alt_name_list
 from ips_data.setting_index import SettingIndex
 
+import logging
+
+logger = logging.getLogger(__name__)
 
 def ex_device_list(
     app,
@@ -283,33 +286,57 @@ def _handle_unmatched_switch(switch, failed_cbs: List) -> None:
 
 
 def _assign_pf_objects(
-    list_of_devices: List[ProtectionDevice]
-) -> List[ProtectionDevice]:
+        list_of_devices: List[ProtectionDevice],
+        data_capture_list=None
+    ) -> List[ProtectionDevice]:
     """
     Create or assign PowerFactory objects for all devices.
     
     Args:
         list_of_devices: List of devices needing PF objects
-        
+        data_capture_list: Optional list to append info records to when a
+            device cannot be placed. If None, drops are logged only.
     Returns:
         Updated list with PF objects assigned
     """
     used_names: Set[str] = set()
     result: List[ProtectionDevice] = []
-    
+
     for device in list_of_devices:
         device_name = _get_device_name(device, used_names)
         used_names.add(device_name)
-        
+
         switch = device.switch
         pf_obj = _find_or_create_pf_device(switch, device_name)
-        
+
         if pf_obj and pf_obj.loc_name == device_name:
             device.pf_obj = pf_obj
             result.append(device)
         elif pf_obj:
+            # PF returned an object whose name doesn't match what we asked
+            # for - typically a silent rename on a name collision. Clean up
+            # the stray object. It had an IPS setting match and its loss must be visible.
+            actual = pf_obj.loc_name
             pf_obj.Delete()
-    
+            logger.warning(
+                f"Could not place device '{device_name}' (setting {device.setting_id}): "
+                f"PF assigned name '{actual}' instead; device skipped"
+            )
+            if data_capture_list is not None:
+                data_capture_list.append(
+                    UpdateResult.info_record(pf_device=None, result_message="Could not place device")
+                )
+        else:
+            # No cubicle resolved for the switch - device cannot be placed.
+            logger.warning(
+                f"Could not place device '{device_name}' (setting {device.setting_id}): "
+                f"no cubicle resolved for switch; device skipped"
+            )
+            if data_capture_list is not None:
+                data_capture_list.append(
+                    UpdateResult.info_record(pf_device=None, result_message="No cubicle for device")
+                )
+
     return result
 
 

@@ -212,21 +212,31 @@ def main(app=None, batch=False):
 
 
 def echo(app, off=True):
-    """Supresses the printing of Warning and information messages to the Output.
+    """Suppress or restore Warning/Info messages in the Output window.
 
-    Usage: Echo(app) turns the echo off
-           Echo(app, off = False) turns the echo back on
+    Usage: echo(app)              turns the echo off (suppress wrng/info)
+           echo(app, off=False)   turns the echo back on (restore all)
+
+    On restore, the per-category iopt_* flags set during suppression MUST
+    be reset to True before On(): On() toggles the master echo state but
+    leaves iopt_wrng / iopt_info disabled, which then silently swallows
+    the app.PrintInfo end-of-run summary in main().
     """
-    echo = app.GetFromStudyCase('ComEcho')
+    com_echo = app.GetFromStudyCase('ComEcho')
     if off:
-        echo.SetAttribute('iopt_err', True)
-        echo.SetAttribute('iopt_wrng', False)
-        echo.SetAttribute('iopt_info', False)
-        echo.SetAttribute('iopt_oth', True)
-        echo.Off()
+        com_echo.SetAttribute('iopt_err', True)
+        com_echo.SetAttribute('iopt_wrng', False)
+        com_echo.SetAttribute('iopt_info', False)
+        com_echo.SetAttribute('iopt_oth', True)
+        com_echo.Off()
     else:
-        pass
-        echo.On()
+        # Restore every category before re-enabling, or the suppressed
+        # warning/info messages stay suppressed after "restore".
+        com_echo.SetAttribute('iopt_err', True)
+        com_echo.SetAttribute('iopt_wrng', True)
+        com_echo.SetAttribute('iopt_info', True)
+        com_echo.SetAttribute('iopt_oth', True)
+        com_echo.On()
 
 
 def create_save_file(app, prjt, called_function):
