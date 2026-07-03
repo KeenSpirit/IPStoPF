@@ -106,8 +106,8 @@ def main(app=None, batch=False):
         prjt = app.GetActiveProject()
         if prjt is None:
             app.PrintError("No active project selected. Activate a project to use this script")
-            logger.error("Script terminated because no active project was selected")
-            exit()
+            logger.error("No active project selected")
+            raise qd.TransferError("No active project selected")
         region = pf_utils.determine_region(prjt)
 
         if region == "Subtransmission":
@@ -191,6 +191,16 @@ def main(app=None, batch=False):
             logger.info("Script completed with no updated settings")
 
         return has_updates
+    except qd.TransferError as exc:
+        # Deliberate aborts: no setting-ID data, no active project, or
+        # user cancel. In batch, re-raise so the mastering layer records
+        # this project as failed and moves on. Interactively, stop
+        # cleanly - error_message has already displayed the reason via
+        # PrintError, so no traceback is needed.
+        if called_function:
+            raise
+        logger.error(f"Transfer aborted: {exc}")
+        return None
     finally:
         # Always restore the echo and stop the timer, even on early return
         # (e.g. batch "already studied"), on exit(), or on an exception.

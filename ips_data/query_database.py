@@ -56,7 +56,7 @@ def get_setting_ids(app, region: str) -> SettingIndex:
         SettingIndex object providing O(1) lookups by various keys
 
     Raises:
-        SystemExit: If unable to retrieve data after multiple attempts
+        TransferError: If unable to retrieve data after multiple attempts
     """
 
     # Check cache first
@@ -103,7 +103,7 @@ def get_setting_id_records(app, region: str) -> List[Dict]:
         List of setting-ID dictionaries (one per protection-device setting).
 
     Raises:
-        SystemExit: If unable to retrieve data after multiple attempts.
+        TransferError: If unable to retrieve data after multiple attempts.
     """
     cache_key = f"setting_id_rows_{region}"
     if cache_key in _rows_cache:
@@ -183,16 +183,43 @@ def _create_ids_dict(region: str) -> List[Dict]:
     return ids_dict_list
 
 
+class TransferError(Exception):
+    """Raised when the settings transfer cannot proceed for this run.
+
+    Replaces the legacy ``sys.exit(0)`` termination. Raising instead of
+    exiting means:
+
+    - In batch, the exception propagates out of ``main()`` to the
+      per-project handler in IPStoPFMastering's ``batch_relay_update``,
+      which records this project as failed and continues with the rest.
+      The run exit code then reflects the failure instead of the false
+      success that exit code 0 reported to Task Scheduler.
+    - Interactively, ``main()`` catches it and stops cleanly with the
+      message, mirroring the old behaviour without killing the process.
+    """
+
+
 def error_message(app, message: str) -> None:
     """
-    Display error message and terminate script.
+    Display an error message and abort the transfer.
+
+    Library code must never call ``sys.exit()`` / ``exit()``: in an
+    80-project batch that terminates the entire mastering process, not
+    just the current project. The message is shown via ``PrintError``
+    (visible even while the echo is suppressed, since ``echo(app)``
+    leaves ``iopt_err`` enabled) and logged, then ``TransferError`` is
+    raised for the caller to handle.
 
     Args:
         app: PowerFactory application object
         message: Error message to display
+
+    Raises:
+        TransferError: always.
     """
     logger.error(message)
-    sys.exit(0)
+    app.PrintError(message)
+    raise TransferError(message)
 
 
 def batch_settings(
