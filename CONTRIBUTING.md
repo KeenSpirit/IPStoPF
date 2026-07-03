@@ -129,11 +129,47 @@ from logging_config import get_logger
 from .setting_index import SettingIndex
 ```
  
-### PowerFactory Output
- 
-- Use `app.PrintPlain()` for anything the user must see; bare `print()` is suppressed in PowerFactory
-- `app.PrintInfo` is suppressed while `echo(app)` is active — comment out `echo(app)` for diagnostic runs
-- Restore echo/timer state on **every** exit path, including early returns
+### PowerFactory Output and Batch-Safety Invariants
+
+These encode failures the pipeline has already had. Keep them true — the
+same invariants hold in the SystemProtectionAssessment layer.
+
+- **Progress that must be visible in batch goes through `logging`, not
+  `app.PrintPlain` / `PrintInfo`.** PrintPlain and PrintInfo are captured
+  to nowhere in headless runs under Task Scheduler; console silence does
+  not mean the process is hung. Use a module-level
+  `logger = logging.getLogger(__name__)`. New top-level package
+  namespaces must be added to the level-pinning list in the mastering
+  entry point. `PrintPlain` is fine for interactive-only convenience
+  output; it is never the sole channel for anything an operator needs to
+  see during an unattended run.
+- **`app.PrintInfo` is suppressed while the echo is off** (during
+  processing). Restore the echo with `echo(app, off=False)` before any
+  end-of-run PrintInfo, and note that restoring the echo must reset the
+  `iopt_*` category flags, not just call `On()` — see `echo()` in
+  `main.py`.
+- **Never call `exit()` / `sys.exit()` in library code.** A bare exit
+  kills the entire ~80-project batch, not just the current project — and
+  `exit(0)` reports false success to Task Scheduler. Deliberate aborts
+  raise `ips_data.query_database.TransferError` (or, for config,
+  `config.validation.ConfigInvalidError`), which `main()` catches.
+  `sys.exit` is acceptable only inside `if __name__ == "__main__"`.
+- **Model mutations must be restored on every exit path.** Echo, GUI-
+  update, write-cache, and user-break state are set up and torn down in
+  `finally` blocks (`main()`'s `echo`/timer, `app_manager`,
+  `update_pf`'s write cache). Any new state you change follows the same
+  mutate/restore-in-`finally` pattern.
+- **Flush the write cache before disabling it.** `update_pf` enables the
+  write cache itself; on any exit path, flush with `WriteChangesToDb()`
+  before `SetWriteCacheEnabled(0)`, or pending changes' persistence is
+  undefined. The `finally` block is the single flush point.
+- **No expensive PF topology walks inside per-device loops.**
+  `GetContents` / `GetAll` / library walks are precomputed once before
+  the loop (see `get_all_protection_devices`'s feeder-set precompute).
+  A walk per device is O(devices × walk) and is a known source of long
+  silent pauses.
+- Restore echo/timer state on **every** exit path, including early
+  returns.
 ## Adding New Features
  
 ### New Relay Pattern
@@ -144,7 +180,11 @@ from .setting_index import SettingIndex
    - Column C: CT secondary (`1` or `5`) **only** if the PowerFactory model depends on it; otherwise leave blank. CT-dependent patterns get one row per secondary
    - Column D: mapping file name
    - Column E: PowerFactory relay model — must match the library type `loc_name` **exactly**
-2. Create the mapping CSV in `mapping_files/relay_maps/`
+2. Create the mapping CSV in `mapping_files/relay_maps/`. **The column
+   layout is a positional contract** — the code reads columns by index
+   (`line[3]`, `i + 3`, `[-1]`). See **[MAPPING_FILE_FORMAT.md](MAPPING_FILE_FORMAT.md)**
+   for the full column spec, the special values (`use_setting`, `None`,
+   the `_logic`/`_dip`/`_Trips` element suffixes), and an editing checklist
 3. If relevant, add the pattern to the classification lists in `config/relay_patterns.py`
 4. If the relay uses non-standard curve names, add entries to `mapping_files/curve_mapping/curve_mapping.csv`
 ### Excluding a Pattern
@@ -233,6 +273,21 @@ If relay/fuse types aren't found:
 - Verify `type_mapping.csv` has a row for the pattern (and the correct CT Sec row for CT-dependent patterns)
 - Confirm column E matches the PowerFactory library type `loc_name` character-for-character
 - Check whether the pattern is excluded via column B
+### Settings Not Applied Correctly
+
+If a relay gets its type but individual settings are wrong, missing, or
+land on the wrong attribute, the mapping CSV row is almost always the
+cause. Check the row against **[MAPPING_FILE_FORMAT.md](MAPPING_FILE_FORMAT.md)**:
+
+- The `use_setting` cell must sit at the position matching its IPS
+  setting order (the `i + 3` alignment) — a misplaced `use_setting`
+  points at a different IPS setting
+- Element-name suffixes (`_logic` / `_dip` / `_Trips`) are substring-
+  matched and case-sensitive; a typo routes the row to the wrong handler
+  (or to none)
+- The adjustment keyword in the last column must be a recognised value
+  (`primary`, `secondary`, `ctr`, `perc_pu`) or a valid math operation;
+  anything else is silently treated as a math op
 ### Unmatched Subtransmission Elements
  
 If reconciliation reports unexpected `ips_only` / `pf_only` entries:

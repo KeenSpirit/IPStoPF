@@ -109,12 +109,15 @@ def update_pf(
             # Check if relay should be switched OOS
             _switch_relay_oos(RELAYS_OOS, device_object)
 
-        # Commit all changes
+        # Commit all changes (success path).
         app.WriteChangesToDb()
 
     finally:
-        # Always disable write cache when done
-        app.SetWriteCacheEnabled(0)
+        # Flush any changes still pending in the write cache before
+        # disabling it.
+        if app.IsWriteCacheEnabled():
+            app.WriteChangesToDb()
+            app.SetWriteCacheEnabled(0)
 
     # Convert any existing dict entries and new results to dicts for output
     final_results = _convert_results_to_dicts(data_capture_list)

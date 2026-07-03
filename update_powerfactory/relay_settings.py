@@ -120,8 +120,20 @@ def relay_settings(
     # Configure phase for single-phase relays
     phase = determine_phase(app, device_object)
     if phase is not None:
-        meas_obj = device_object.pf_obj.GetContents("*.RelMeasure")[0]
-        meas_obj.SetAttribute("e:iphase", phase)
+        meas_elems = device_object.pf_obj.GetContents("*.RelMeasure")
+        if meas_elems:
+            meas_elems[0].SetAttribute("e:iphase", phase)
+        else:
+            # No measurement element to phase-configure. This normally means
+            # the relay type wasn't assigned (e.g. check_relay_type recorded
+            # "Type not found" and set outserv=1), so the relay has no
+            # RelMeasure children.
+            logger.warning(
+                f"No RelMeasure element on '{device_object.name}' "
+                f"(pattern {device_object.device}); phase {phase} not applied"
+            )
+            if not result.result:
+                result.result = "No measurement element for phase assignment"
 
     # Build setting dictionary and apply settings
     if mapping_file:

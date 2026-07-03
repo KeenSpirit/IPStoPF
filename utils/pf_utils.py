@@ -118,18 +118,25 @@ def get_all_protection_devices(app: Any) -> Tuple[List[Any], Dict[str, List]]:
         if not feeder.IsOutOfService()
     ]
 
+    # Precompute each feeder's element set once.
+    feeder_elements = {
+        feeder.loc_name: set(feeder.GetAll())
+        for feeder in active_feeders
+    }
+
     # Build device dictionary
     device_dict = {}
     for device in devices:
         term = device.cbranch
 
-        # Find feeder containing this device
-        feeder = [
-            feeder.loc_name for feeder in active_feeders
-            if term in feeder.GetAll()
-        ]
-        if not feeder:
-            feeder = ["Not in a Feeder"]
+        # Find the first feeder whose element set contains this device's branch.
+        feeder_name = next(
+            (
+                name for name, elems in feeder_elements.items()
+                if term in elems
+            ),
+            "Not in a Feeder",
+        )
 
         # Get number of phases
         try:
@@ -141,7 +148,7 @@ def get_all_protection_devices(app: Any) -> Tuple[List[Any], Dict[str, List]]:
             device,
             device.GetClassName(),
             num_phases,
-            feeder[0],
+            feeder_name,
             device.cpGrid.loc_name,
         ]
 

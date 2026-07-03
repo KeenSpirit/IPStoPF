@@ -1,5 +1,96 @@
 """
+Entry point for the IPS -> PowerFactory settings transfer.
 
+This module detects the type of the active PowerFactory project and
+routes to one of three pipelines, all of which converge on the same
+settings-application machinery (``update_powerfactory.orchestrator.update_pf``).
+
+Routing (decided by ``utils.pf_utils.determine_region`` on the active
+project's base-project folder name)::
+
+    determine_region(prjt)
+        │
+        ├─ "Subtransmission"  (folder "EQL Subtransmission")
+        │     INTERACTIVE ONLY - skipped when called_function is True.
+        │     Region dialog → Energex or Ergon:
+        │       • Energex : ingest IPS records (process_ips) →
+        │                   walk model (process_pf_elements) →
+        │                   element-selection tree (ui) →
+        │                   reconcile (mapping) →
+        │                   build devices (ips_data.sbtrans_settings)
+        │       • Ergon   : falls through to the Ergon distribution
+        │                   path with batch=True (inactive-record filter)
+        │
+        ├─ "Energex"  (folder "SEQ Models")
+        │     Distribution, switch-name matched.
+        │     ips_data.ips_settings.get_ips_settings(...)
+        │
+        └─ "Ergon"  (any other folder)
+              Distribution, plant-number matched.
+              ips_data.ips_settings.get_ips_settings(...)
+
+    All paths → update_pf → data_capture_list → results CSV.
+
+Invocation and the two mode flags
+---------------------------------
+``main(app=None, batch=False)``
+
+    app : PowerFactory application object.
+        - None      → interactive run. The module calls
+                      ``pf.GetApplication()`` itself and sets
+                      ``called_function = False``.
+        - provided  → this script was launched by a parent process
+                      (e.g. IPStoPFMastering). ``called_function`` is
+                      set to True.
+
+    called_function : derived from whether ``app`` was passed in. It is
+        the INVOCATION-CONTEXT flag: standalone vs. called-from-parent.
+        It controls UI suppression (the subtransmission branch refuses
+        to run when True, since it needs dialogs) and output pathing
+        (batch directory vs. local).
+
+    batch : the SETTINGS-LOADING-STRATEGY flag: bulk vs. per-device.
+        When True (or when the user picks "Batch" in the selection
+        dialog) every device in the project is processed and settings
+        are fetched in one bulk query rather than per device.
+
+    These two flags are deliberately distinct - see CONTRIBUTING.md.
+    Conflating "how were we invoked" with "how do we load settings"
+    caused silent correctness bugs previously. A batch/called run has
+    both True; an interactive "update everything" run has batch True
+    but called_function False.
+
+Return contract
+---------------
+``main()`` returns:
+    - True/False  → transfer ran; flag indicates whether any settings
+                    were actually updated (``has_updates``).
+    - None        → the run was aborted or skipped before completion:
+                    batch config-validation failure, a subtransmission
+                    project reached in called_function mode, or a
+                    deliberate ``TransferError`` abort (no active
+                    project, no setting-ID data, user cancel).
+
+    NOTE: the None-means-both-"skipped"-and-"aborted" ambiguity is a
+    known limitation (fix 1.3). Callers that need to distinguish
+    skipped from failed should not rely on the current return alone.
+
+Batch-safety invariants (shared with the SPA layer)
+---------------------------------------------------
+    * No ``exit()`` / ``sys.exit()`` in library code - a bare exit
+      kills the whole 80-project batch, not just this project.
+      Deliberate aborts raise ``ips_data.query_database.TransferError``,
+      caught below in ``main()``.
+    * Progress meant to be visible in headless runs must go through
+      ``logging`` (``logger.info``), not ``app.PrintPlain`` /
+      ``PrintInfo``, which are invisible when captured to stdout.
+    * The echo is suppressed during processing and MUST be restored in
+      the ``finally`` block (see ``echo``); PrintInfo output is
+      swallowed until it is.
+
+See ASSUMPTIONS.md for the full architecture and the subtransmission
+mapping pipeline; README.md for the operator runbook; CONTRIBUTING.md
+for the batch/called_function rules and coding standards.
 """
 import powerfactory as pf
 import os
@@ -176,8 +267,9 @@ def main(app=None, batch=False):
 
         # Restore the echo so the outcome messages below are visible.
         echo(app, off=False)
-        #if not batch:
-        print_results(app, data_capture_list)
+        # Interactive only: Skip the work in batch.
+        if not called_function:
+            print_results(app, data_capture_list)
 
         stop_time = get_current_timestamp()
         app.PrintInfo(
@@ -287,28 +379,30 @@ def select_main_file(file_name, location, called_function):
 
 
 def print_results(app, data_capture_list):
-    """This is to provide information to the user about the results of the
-    script."""
-    devices, device_object_dict = pf_utils.get_all_protection_devices(app)
-    print_string = str()
-    # app.ClearOutputWindow()
+    """Print a per-device result summary to the PowerFactory output window.
+
+    Interactive convenience only.
+    The device name and result are read straight from each data_capture_list
+    row
+    """
+    print_string = ""
     for i, info in enumerate(data_capture_list):
         if i % 40 == 0:
             app.PrintInfo(print_string)
-            print_string = str()
-        try:
-            device = info["PLANT_NUMBER"]
-            pf_device = device_object_dict[device][0]
-        except KeyError:
-            try:
-                pf_device = info["CB_NAME"]
-            except KeyError:
-                pf_device = info["PLANT_NUMBER"]
-        try:
-            result = info["RESULT"]
-        except KeyError:
-            result = "Updated Successfully"
-        print_string = print_string + "\n" + f"{pf_device}    Result = {result}"
+            print_string = ""
+
+        # Device name: PLANT_NUMBER (relays/fuses) or CB_NAME (unmatched
+        # Energex CB rows). to_dict() drops empty fields, so use .get().
+        device_name = info.get("PLANT_NUMBER") or info.get("CB_NAME") or "Unknown"
+
+        # A successfully updated relay has no RESULT key (see
+        # DATA_CAPTURE_LIST.md); report that explicitly rather than
+        # inventing an "Updated Successfully" string that appears nowhere
+        # else in the output.
+        result = info.get("RESULT", "Updated (no result flag)")
+
+        print_string += f"\n{device_name}    Result = {result}"
+
     app.PrintInfo(print_string)
 
 
