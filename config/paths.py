@@ -92,7 +92,7 @@ MAPPING_FILES_DIR = os.path.join(
 OUTPUT_BATCH_DIR = os.path.join(
     SCRIPTS_BASE,
     "ScriptsDEV",
-    "IPSDataTransferMastering",
+    "ProtectionBatchRunner",
     "Script_Results"
 )
 

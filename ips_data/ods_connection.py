@@ -3,7 +3,7 @@ Direct Oracle ODS connection for batch protection-setting retrieval.
 
 The interactive path queries IPS through the NetDash API, which can only
 filter one setting ID per request, costing one round trip per relay. For
-unattended batch runs (the IPSDataTransferMastering driver) a privileged user
+unattended batch runs (the ProtectionBatchRunner driver) a privileged user
 can connect straight to the Oracle ODS, where the IPS data is mirrored, and
 filter on a list of setting IDs in a single query. This module owns that
 connection: credential loading, host/service resolution, and the cx_Oracle
@@ -45,8 +45,7 @@ SQL_LOGIN_PATHS = [
     r"\\Client\C$\localdata\BatchStudy\sql_login_details.yaml",
 ]
 
-# ODS [scan host, service name] per region. Mirrors the legacy
-# determine_ips_db(). Move to config/ if you prefer central path management.
+# ODS [scan host, service name] per region. Move to config/ if you prefer central path management.
 ODS_TARGETS = {
     "Energex": [
         "cbnf1c02vm01-vip.au1.ocm.s7130879.oraclecloudatcustomer.com",

@@ -304,8 +304,6 @@ _BATCH_COLS = [
 
 _ORACLE_IN_LIMIT = 1000
 
-# Transcribed from the legacy ips_to_pf.batch_seq_get_ips_settings.
-# Whitespace reformatted; joins/filters preserved. Verify against original.
 ENERGEX_BATCH_SQL = """
 SELECT
     relparblock.blockpathenu, relparmodel.paramnameenu,
@@ -340,8 +338,6 @@ WHERE relaysetting.relaysettingid IN ({in_clause})
 ORDER BY relaysetting.assetid
 """
 
-# Transcribed from the legacy ips_to_pf.batch_reg_get_ips_settings.
-# Whitespace reformatted; joins/filters preserved. Verify against original.
 ERGON_BATCH_SQL = """
 SELECT  relparblock.blockpathenu,
         RelParModel.ParamNameENU,
