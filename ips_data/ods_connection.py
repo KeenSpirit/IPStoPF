@@ -47,9 +47,13 @@ SQL_LOGIN_PATHS = [
 
 # ODS [scan host, service name] per region. Move to config/ if you prefer central path management.
 ODS_TARGETS = {
+    # "Energex": [
+    #     "cbnf1c02vm01-vip.au1.ocm.s7130879.oraclecloudatcustomer.com",
+    #     "XEDWHPS1.au1.ocm.s7130879.oraclecloudatcustomer.com",
+    # ],
     "Energex": [
-        "cbnf1c02vm01-vip.au1.ocm.s7130879.oraclecloudatcustomer.com",
-        "XEDWHPS1.au1.ocm.s7130879.oraclecloudatcustomer.com",
+        "sbnfaxda-scan1",
+        "XEDWHPR1.SRV",
     ],
     "Ergon": [
         "cbns1c-scan1",
