@@ -41,8 +41,8 @@ class ODSUnavailable(Exception):
 
 # Primary and Citrix-fallback locations of the ODS credential file.
 SQL_LOGIN_PATHS = [
-    r"C:\LocalData\BatchStudy\sql_login_details.yaml",
-    r"\\Client\C$\localdata\BatchStudy\sql_login_details.yaml",
+    r"C:\LocalData\ProtectionBatchRunner\sql_login.yaml",
+    r"\\Client\C$\localdata\ProtectionBatchRunner\sql_login.yaml",
 ]
 
 # ODS [scan host, service name] per region. Move to config/ if you prefer central path management.
