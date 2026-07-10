@@ -101,21 +101,21 @@ def determine_ips_db(region):
     wait=wait_random_exponential(multiplier=1, max=5),
 )
 def _connect_with_retry(username, password, ips_db):
-    """Open the cx_Oracle connection, retrying transient failures only.
+    """Open the oracledb connection, retrying transient failures only.
 
     Separated from connect_to_db so the retry budget is spent on the
     (potentially transient) connection attempt, not on deterministic failures
     like a missing client or credential file.
     """
-    import cx_Oracle
+    import oracledb
 
-    tns = cx_Oracle.makedsn(ips_db[0], ODS_PORT, service_name=ips_db[1])
+    tns = oracledb.makedsn(ips_db[0], ODS_PORT, service_name=ips_db[1])
     logger.info(f"Opening ODS connection to {ips_db[1]}")
-    return cx_Oracle.connect(username, password, tns)
+    return oracledb.connect(username, password, tns)
 
 
 def connect_to_db(region):
-    """Open a direct cx_Oracle connection to the region's IPS ODS.
+    """Open a direct oracledb connection to the region's IPS ODS.
 
     Raises:
         ODSUnavailable: if the Oracle client is missing, the credential file is
@@ -123,9 +123,9 @@ def connect_to_db(region):
             should fall back to the NetDash path on this exception.
     """
     try:
-        import cx_Oracle
+        import oracledb
     except ImportError as exc:
-        raise ODSUnavailable("cx_Oracle is not installed") from exc
+        raise ODSUnavailable("oracledb is not installed") from exc
 
     try:
         ips_db = determine_ips_db(region)
@@ -135,5 +135,5 @@ def connect_to_db(region):
 
     try:
         return _connect_with_retry(username, password, ips_db)
-    except cx_Oracle.Error as exc:
+    except oracledb.Error as exc:
         raise ODSUnavailable(f"Could not connect to ODS: {exc}") from exc
