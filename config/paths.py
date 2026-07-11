@@ -45,14 +45,6 @@ NETDASH_READER_PATH = os.path.join(SCRIPTS_BASE, "ScriptsLIB", "NetDash-Reader")
 # Asset Classes library for corporate data access
 ASSET_CLASSES_PATH = os.path.join(SCRIPTS_BASE, "Scripts", "AssetClasses")
 
-# Add Protection Relay Skeletons script
-RELAY_SKELETONS_PATH = os.path.join(
-    SCRIPTS_BASE,
-    "ScriptsDEV",
-    "AddProtectionRelaySkeletons",
-    "addprotectionrelayskeletons"
-)
-
 # =============================================================================
 # Mapping Files - Project Root Structure
 # =============================================================================
@@ -238,7 +230,6 @@ def add_external_library_paths() -> None:
     paths_to_add = [
         NETDASH_READER_PATH,
         ASSET_CLASSES_PATH,
-        RELAY_SKELETONS_PATH,
     ]
 
     for path in paths_to_add:
@@ -293,7 +284,6 @@ def validate_paths() -> dict:
         "OUTPUT_BATCH_DIR": OUTPUT_BATCH_DIR,
         "NETDASH_READER_PATH": NETDASH_READER_PATH,
         "ASSET_CLASSES_PATH": ASSET_CLASSES_PATH,
-        "RELAY_SKELETONS_PATH": RELAY_SKELETONS_PATH,
     }
 
     results = {}

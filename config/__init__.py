@@ -40,7 +40,6 @@ from config.paths import (
     # External library paths
     NETDASH_READER_PATH,
     ASSET_CLASSES_PATH,
-    RELAY_SKELETONS_PATH,
     # Mapping file directories
     MAPPING_FILES_BASE,
     CB_ALT_NAMES_DIR,
@@ -103,7 +102,6 @@ __all__ = [
     # External library paths
     "NETDASH_READER_PATH",
     "ASSET_CLASSES_PATH",
-    "RELAY_SKELETONS_PATH",
     # Mapping file directories
     "MAPPING_FILES_BASE",
     "CB_ALT_NAMES_DIR",

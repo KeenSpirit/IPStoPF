@@ -322,7 +322,6 @@ def _validate_paths(result: ValidationResult, config: ValidationConfig) -> None:
         OUTPUT_LOCAL_DIR,
         NETDASH_READER_PATH,
         ASSET_CLASSES_PATH,
-        RELAY_SKELETONS_PATH,
     )
 
     # Critical paths that must exist (mapping directories in project)
@@ -339,7 +338,6 @@ def _validate_paths(result: ValidationResult, config: ValidationConfig) -> None:
         "OUTPUT_LOCAL_DIR": OUTPUT_LOCAL_DIR,
         "NETDASH_READER_PATH": NETDASH_READER_PATH,
         "ASSET_CLASSES_PATH": ASSET_CLASSES_PATH,
-        "RELAY_SKELETONS_PATH": RELAY_SKELETONS_PATH,
         "SCRIPTS_BASE": SCRIPTS_BASE,
     }
 
