@@ -56,7 +56,7 @@ def update_pf(
         return _convert_results_to_dicts(data_capture_list), False
 
     # Build type indexes once for O(1) lookups
-    app.PrintPlain("Creating indexed database of PowerFactory Fuse and Relay Types")
+    logger.info("Creating indexed database of PowerFactory Fuse and Relay Types")
     relay_index = RelayTypeIndex.build(app)
 
     fuse_index = FuseTypeIndex.build(app)
