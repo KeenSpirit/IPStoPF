@@ -395,10 +395,8 @@ def print_results(app, data_capture_list):
         device_name = info.get("PLANT_NUMBER") or info.get("CB_NAME") or "Unknown"
 
         # A successfully updated relay has no RESULT key (see
-        # DATA_CAPTURE_LIST.md); report that explicitly rather than
-        # inventing an "Updated Successfully" string that appears nowhere
-        # else in the output.
-        result = info.get("RESULT", "Updated (no result flag)")
+        # DATA_CAPTURE_LIST.md)
+        result = info.get("RESULT", "Updated Successfully")
 
         print_string += f"\n{device_name}    Result = {result}"
 

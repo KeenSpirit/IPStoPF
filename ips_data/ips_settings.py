@@ -24,6 +24,7 @@ from ips_data import query_database as qd
 from ips_data import ee_settings as ee
 from ips_data import ex_settings as ex
 from ips_data import add_subtrans_prot_relay_skele as asprs
+# from ips_data import add_protection_relay_skeletons as aprs
 from ips_data.setting_index import SettingIndex
 from utils.pf_utils import get_all_protection_devices
 from user_interface.device_selection import user_selection
@@ -138,6 +139,7 @@ def _get_selected_devices(
             if grid:
                 asprs.add_relay_skeletons(app, grid)
             else:
+                # aprs.add_relay_skeletons(app, grid)
                 add_protection_relay_skeletons.main(app)
             # app.ClearOutputWindow()
             app.PrintPlain("Creating a list of Setting IDs for all Ergon devices")
