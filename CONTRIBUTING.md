@@ -330,7 +330,28 @@ feat: Add CT-secondary variant selection for relay types
 - Added _normalise_ct_key and _select_type_variant
 - Column B exclusion flags replace EXCLUDED_PATTERNS
 ```
- 
+## ODS / EDW SQL and driver constraints
+
+- **The EDW Oracle server is pre-12.1.** Any SQL executed against it
+  (the region batch queries in `ips_data/query_database.py`) must avoid
+  12c+ syntax: no `FETCH FIRST` / `OFFSET`, no `LATERAL`, no identity
+  columns in DDL. Use `ROWNUM` for row limiting. Revisit this constraint
+  during the EDW-to-Lakehouse migration, when these queries are rewritten.
+- **python-oracledb must run in thick mode** for the same reason (thin
+  mode requires server >= 12.1 and fails with DPY-3010). Thick mode needs
+  Oracle Instant Client 19c (Basic Light, Windows x64) unzipped at
+  `INSTANT_CLIENT_DIR` (see `ips_data/ods_connection.py`) on every
+  execution machine. 19c is the correct client version: it connects to
+  11.2+ servers, whereas 21c+ clients require 12.1+.
+- **Deployment checklist per machine:** oracledb installed in the
+  pipeline interpreter, Instant Client at `INSTANT_CLIENT_DIR`,
+  `sql_login.yaml` at `C:\LocalData\ProtectionBatchRunner\` with keys
+  `seq_user`/`seq_password`/`reg_user`/`reg_password`.
+- **Fallback behaviour:** if any of the above is missing, the run does
+  NOT fail — it silently falls back to the NetDash per-ID path. Verify
+  the fast path is active by checking the log for
+  `ODS batch fetch: N setting IDs in M query(ies)`; the warning
+  `ODS bulk fetch unavailable (...)` means the fallback engaged.
 ## Contact
  
 For questions about the codebase, contact dan.park@energyq.com.au

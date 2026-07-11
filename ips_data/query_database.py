@@ -394,7 +394,7 @@ def batch_get_ips_settings(
     IN-list limit.
 
     Args:
-        connection: open cx_Oracle connection (ods_connection.connect_to_db)
+        connection: open oracledb connection (ods_connection.connect_to_db)
         unique_ids: relay setting IDs to fetch
         sql: region SQL template containing a single ``{in_clause}`` token
         skip_empty_setting: drop rows whose proposedsetting is empty (Ergon)
