@@ -52,7 +52,7 @@ ODS_TARGETS = {
     #     "XEDWHPS1.au1.ocm.s7130879.oraclecloudatcustomer.com",
     # ],
     "Energex": [
-        "sbnfaxda-scan1",
+        "sbnsaxpa-scan1",
         "XEDWHPR1.SRV",
     ],
     "Ergon": [
