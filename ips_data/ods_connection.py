@@ -41,7 +41,6 @@ class ODSUnavailable(Exception):
     failed query) - those propagate so genuine bugs are not silently masked.
     """
 
-
 # Primary and Citrix-fallback locations of the ODS credential file.
 SQL_LOGIN_PATHS = [
     r"C:\LocalData\ProtectionBatchRunner\sql_login.yaml",
@@ -69,7 +68,8 @@ ODS_PORT = 1521
 # The EDW server predates Oracle 12.1, which python-oracledb's thin mode
 # requires (DPY-3010 on connect). Thick mode via Instant Client 19c
 # (supports 11.2+ servers) is therefore mandatory, not optional.
-INSTANT_CLIENT_DIR = r"C:\LocalData\ProtectionBatchRunner\instantclient_19_25"
+INSTANT_CLIENT_DIR = \
+    r"C:\LocalData\ProtectionBatchRunner\instantclient-basiclite-windows.x64-23.26.2.0.0\instantclient_23_0"
 
 _thick_mode_ready = False
 
