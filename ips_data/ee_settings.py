@@ -16,7 +16,9 @@ from core import ProtectionDevice, SettingRecord, UpdateResult
 from utils.pf_utils import determine_fuse_role
 from ips_data import query_database as qd
 from ips_data.setting_index import SettingIndex
+from logging_config import get_logger
 
+logger = get_logger(__name__)
 
 def ee_device_list(
     app,
@@ -46,7 +48,7 @@ def ee_device_list(
 
     for i, device_name in enumerate(selections):
         if i % 10 == 0:
-            app.PrintPlain(f"IPS is being checked for device {i} of {len(selections)}")
+            logger.info(f"IPS is being checked for device {i} of {len(selections)}")
 
         plant_number = get_plant_number(device_name)
         pf_device = device_dict[device_name][0]
@@ -115,7 +117,7 @@ def ergon_all_dev_list(
 
     for i, pf_device in enumerate(prot_devices):
         if i % 10 == 0:
-            app.PrintPlain(f"IPS is being checked for device {i} of {len(prot_devices)}")
+            logger.info(f"IPS is being checked for device {i} of {len(prot_devices)}")
 
         # Delete duplicate devices (names ending with parentheses)
         if pf_device.loc_name.endswith(")"):

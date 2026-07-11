@@ -9,7 +9,6 @@ The module uses SettingIndex for efficient lookups instead of
 linear scans through raw setting lists.
 """
 
-import logging
 import sys
 from typing import List, Tuple, Optional, Dict, Any, Union
 from importlib import reload
@@ -28,6 +27,9 @@ from ips_data import add_subtrans_prot_relay_skele as asprs
 from ips_data.setting_index import SettingIndex
 from utils.pf_utils import get_all_protection_devices
 from user_interface.device_selection import user_selection
+from logging_config import get_logger
+
+logger = get_logger(__name__)
 
 reload(ex)
 reload(asprs)
@@ -63,22 +65,29 @@ def get_ips_settings(
 
     # Create indexed setting ID lookup
     setting_index = qd.get_setting_ids(app, region)
+    logger.info("Setting-ID index built")
 
     # Get selected devices and their setting IDs
     set_ids, device_list, data_capture_list = _get_selected_devices(
         app, batch, region, data_capture_list, setting_index, called_function, grid
+    )
+    logger.info(
+        f"Device enumeration complete: {len(device_list)} devices, "
+        f"{len(set_ids)} setting IDs"
     )
 
     # Load detailed settings for all devices
     ips_settings, ips_it_settings = qd.batch_settings(
         app, region, batch, set_ids
     )
+    logger.info("Settings fetch complete; associating settings with devices")
 
     # Associate settings with each device
     _associate_device_settings(
         app, device_list, ips_settings, ips_it_settings,
         region, batch
     )
+    logger.info("Settings association complete; handing off to update_pf")
 
     return device_list, data_capture_list
 

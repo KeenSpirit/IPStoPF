@@ -277,10 +277,16 @@ def batch_settings(
             )
             ips_settings = _fetch_settings_in_batches(app, set_ids, fetch_func)
 
+    logger.info("Fetching instrument transformer details (cached report)")
+    it_start = time.perf_counter()
     if region == "Energex":
         ips_it_settings = seq_get_ips_it_details(app, set_ids)
     else:
         ips_it_settings = reg_get_ips_it_details(app, set_ids)
+    logger.info(
+        f"IT details fetch returned {len(ips_it_settings)} records in "
+        f"{time.perf_counter() - it_start:.1f} s"
+    )
 
     return ips_settings, ips_it_settings
 

@@ -92,7 +92,7 @@ def _get_switches_for_selections(
     
     for i, device in enumerate(selections):
         if i % 10 == 0:
-            app.PrintPlain(f"Finding switch for device {i} of {len(selections)}")
+            logger.info(f"Finding switch for device {i} of {len(selections)}")
         
         # Extract base device name (before underscore)
         device_name = device.split("_")[0]
@@ -175,7 +175,7 @@ def create_new_devices(
     
     for i, switch in enumerate(switches):
         if i % 10 == 0:
-            app.PrintPlain(f"IPS is being checked for switch {i} of {len(switches)}")
+            logger.info(f"IPS is being checked for switch {i} of {len(switches)}")
         
         # Skip certain ElmCoup switches
         if not _should_process_switch(switch):
@@ -203,7 +203,7 @@ def create_new_devices(
 
     # Debug code:
     # for device in list_of_devices:
-    #     app.PrintPlain(vars(device))
+    #     logger.info(vars(device))
     
     return list_of_devices, failed_cbs, setting_ids
 
@@ -473,8 +473,8 @@ def _get_setting_id_indexed(
     # both "NIP1A" and "NIP1B"
     records = setting_index.get_by_switch_name(switch_name, sub_code)
     # Debug code:
-    # app.PrintPlain(f"switch_name: {switch_name}, sub_code: {sub_code}")
-    # app.PrintPlain(f"records: {records}")
+    # logger.info(f"switch_name: {switch_name}, sub_code: {sub_code}")
+    # logger.info(f"records: {records}")
 
     # Create devices from matching records
     for record in records:

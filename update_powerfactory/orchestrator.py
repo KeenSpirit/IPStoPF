@@ -78,7 +78,7 @@ def update_pf(
         for i, device_object in enumerate(lst_of_devs):
             # Progress reporting
             if i % 10 == 0:
-                app.PrintPlain(f"Device {i} of {len(lst_of_devs)} is being updated")
+                logger.info(f"Device {i} of {len(lst_of_devs)} is being updated")
 
             # Skip devices without PowerFactory object
             if not device_object.pf_obj:
