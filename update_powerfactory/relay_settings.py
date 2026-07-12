@@ -105,6 +105,24 @@ def relay_settings(
     result.relay_pattern = device_object.device
     result.used_pattern = device_object.device
 
+    # Switch- and sectionaliser-classified devices are not modelled as
+    # protection relays: no mapping lookup, no type assignment, no
+    # settings or CT/VT updates. The PF element already exists; place
+    # it out of service and report informationally (not as an error).
+    if device_object.device.startswith(("switch_", "sect_")):
+        kind = (
+            "Sectionaliser" if device_object.device.startswith("sect_")
+            else "Switch"
+        )
+        device_object.pf_obj.SetAttribute("outserv", 1)
+        result.result = f"{kind} - placed out of service"
+        logger.info(
+            f"{device_object.name}: classified as {kind.lower()} "
+            f"({device_object.device}); element out of service, "
+            f"no settings applied"
+        )
+        return result, updates
+
     # Load mapping file for this relay pattern. CT secondary selects the
     # correct PowerFactory model for patterns that are CT-dependent.
     mapping_file, mapping_type = mf.read_mapping_file(
@@ -212,7 +230,7 @@ def update_device_function(device_object: Any) -> None:
             if setting[1] in ["Detection"]:
                 if setting[2].lower() == "on":
                     device_object.device = f"switch_{device_object.device}"
-
+                    break
 
 # =============================================================================
 # Relay Type Management

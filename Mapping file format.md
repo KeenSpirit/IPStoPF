@@ -254,3 +254,16 @@ Before committing a change to a relay map:
 - [ ] The pattern's row in `type_mapping.csv` still points at this file
       (and the correct CT-secondary variant, if the pattern is
       CT-dependent).
+- [ ] The pattern is **not** `switch_`- or `sect_`-prefixed. Such rows
+      are dead by design (see note below) and must not be added.
+
+> **`switch_*` / `sect_*` patterns are never looked up.**
+> `update_device_function` (in `update_powerfactory/relay_settings.py`)
+> prepends `switch_`/`sect_` to devices classified as switches or
+> sectionalisers, and `relay_settings` then short-circuits: the element
+> is placed out of service with an informational result and **no**
+> `type_mapping.csv` lookup occurs. A `switch_*`/`sect_*` row in
+> `type_mapping.csv` is therefore inert — it will never be read. (A stray
+> `switch_RC01ES_Energex` row previously masked this; it has been removed.)
+> `swer_*` rows are the exception — those *are* live, because SWER devices
+> are still modelled as relays.

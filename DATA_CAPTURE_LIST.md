@@ -51,7 +51,9 @@ To detect success in post-run analysis, treat a row as successful when it has a
 | `Type Correct` | `fuse_setting` | Fuse already had the correct type | Success (fuse) |
 | `Not in IPS` | `orchestrator.not_in_ips`, `fuse_setting` | PF device found, but no IPS setting/fuse matched it | Matching |
 | `No protection settings found in IPS` | `failed_cb` (Energex) | CB could not be matched; row carries `CB_NAME` not `PLANT_NUMBER` | Matching |
-| `Mapping file not found` | `relay_settings` | Pattern missing from `type_mapping.csv`, or its relay_maps CSV is empty/missing; device set OOS | Mapping accuracy |
+| `Mapping file not found` | `relay_settings` | Pattern missing from `type_mapping.csv`, or its relay_maps CSV is empty/missing; device set OOS. Does **not** cover `switch_`/`sect_`-classified devices — those short-circuit earlier (see the two rows below) | Mapping accuracy |
+| `Switch - placed out of service` | `relay_settings` | Device classified `switch_*` by `update_device_function` (no protection settings, or a `Detection` group on). Not modelled as a relay: element set OOS, no mapping lookup, type, settings, or CT/VT applied | Informational |
+| `Sectionaliser - placed out of service` | `relay_settings` | Device classified `sect_*` by `update_device_function` (a `Sectionaliser` group on/auto). Handled exactly as a switch: element set OOS, no relay processing | Informational |
 | `Type not found: {type}` | `check_relay_type` | Mapping names a PF relay type absent from the library; device set OOS | Mapping accuracy |
 | `Type Matching Error` | `fuse_setting` | No fuse type matched by curve+rating or fuse_size | Mapping accuracy |
 | `Script Failed` | `_handle_device_error` | Unhandled exception during processing; device set OOS; `ERROR_DETAIL` populated | Script error |
@@ -94,4 +96,4 @@ rows dropped from per-device grouping.
 | Script error | `Script Failed`, `FAILED FUSE` | Group by `ERROR_DETAIL` for a ranked list of distinct crash causes; each also silently set the device OOS |
 | Mapping accuracy | `Mapping file not found`, `Type not found: {type}`, `Type Matching Error` | Group by `RELAY_PATTERN` / type name to find gaps in `type_mapping.csv`, the PF type library, or `curve_mapping.csv` |
 | Matching | `Not in IPS`, `No protection settings found in IPS` | Track the rate over runs; a high or rising count points at `setting_index` lookup gaps and acts as a regression check on naming-mismatch fixes |
-| Informational | `Not a protection device`, `No CT/VT Linked` | Usually expected; large `Not a protection device` volume indicates objects scanned and discarded each run (filtering opportunity) |
+| Informational | `Not a protection device`, `No CT/VT Linked`, `Switch - placed out of service`, `Sectionaliser - placed out of service` | Usually expected. `Switch`/`Sectionaliser` rows are devices deliberately not modelled as relays — a large or rising count is worth a glance (classification drift) but is not an error. Large `Not a protection device` volume indicates objects scanned and discarded each run (filtering opportunity) |
