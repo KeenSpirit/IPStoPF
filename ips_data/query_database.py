@@ -265,7 +265,7 @@ def batch_settings(
         )
         try:
             with closing(ods_connection.connect_to_db(region)) as connection:
-                ips_settings = batch_get_ips_settings(
+                ips_settings = batch_get_ips_settings(app,
                     connection, set_ids, sql, skip_empty_setting=skip_empty
                 )
         except ods_connection.ODSUnavailable as exc:
@@ -384,7 +384,7 @@ def _chunked(items: List, size: int):
         yield items[i:i + size]
 
 
-def batch_get_ips_settings(
+def batch_get_ips_settings(app,
     connection,
     unique_ids: List[str],
     sql: str,
