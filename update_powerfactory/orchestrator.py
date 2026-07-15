@@ -55,18 +55,25 @@ def update_pf(
         logger.warning("No devices to update")
         return _convert_results_to_dicts(data_capture_list), False
 
-    # Build type indexes once for O(1) lookups
+    import time as _time
     logger.info("Creating indexed database of PowerFactory Fuse and Relay Types")
+    _t0 = _time.monotonic()
     relay_index = RelayTypeIndex.build(app)
-
+    logger.info(f"Relay type index built: {len(relay_index)} types in {_time.monotonic() - _t0:.1f} s")
+    _t0 = _time.monotonic()
     fuse_index = FuseTypeIndex.build(app)
+    logger.info(f"Fuse type index built: {len(fuse_index)} types in {_time.monotonic() - _t0:.1f} s")
 
     # Resolve the CT/VT library folders ONCE for the whole run. Each lookup is a
     # full recursive walk of the local library; doing it per device (as the old
     # update_ct/update_vt did) meant ~2 walks per relay and was the cause of the
     # long silent pause inside update_pf.
+    _t0 = _time.monotonic()
     ct_library = cs.get_ct_library(app)
+    logger.info(f"CT library resolved in {_time.monotonic() - _t0:.1f} s")
+    _t0 = _time.monotonic()
     vt_library = vs.get_vt_library(app)
+    logger.info(f"VT library resolved in {_time.monotonic() - _t0:.1f} s")
 
     updates = False
     results: List[UpdateResult] = []
