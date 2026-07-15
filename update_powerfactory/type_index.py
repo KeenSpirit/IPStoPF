@@ -23,6 +23,9 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Tuple
 
 from utils.pf_utils import all_relevant_objects
+from logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -77,7 +80,17 @@ class RelayTypeIndex:
             dig_lib = database.GetContents("Lib")[0]
             prot_lib = dig_lib.GetContents("Prot")[0]
             relay_lib = prot_lib.GetContents("ProtRelay")
-            dig_types = all_relevant_objects(app, relay_lib, "*.TypRelay", None)
+            # Server-side recursive fetch: one round-trip per ProtRelay folder
+            # instead of one per subfolder. The Python-level crawl
+            # (all_relevant_objects) took ~60 s co-located and 70+ min over
+            # WAN latency (Tablelands, 2026-07-15).
+            dig_types = []
+            for _folder in relay_lib or []:
+                dig_types.extend(_folder.GetContents("*.TypRelay", 1) or [])
+            logger.info(
+                f"Type index: DIgSILENT library fetched "
+                f"({len(dig_types)} candidate types)"
+            )
 
             for relay_type in dig_types or []:
                 name = relay_type.loc_name
