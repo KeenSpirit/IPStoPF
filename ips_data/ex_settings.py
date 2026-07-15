@@ -17,9 +17,9 @@ from ips_data import query_database as qd
 from ips_data.cb_mapping import get_cb_alt_name_list
 from ips_data.setting_index import SettingIndex
 
-import logging
+from logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def ex_device_list(
     app,

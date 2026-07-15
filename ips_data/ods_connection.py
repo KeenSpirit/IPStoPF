@@ -58,8 +58,8 @@ ODS_TARGETS = {
         "XEDWHPR1.SRV",
     ],
     "Ergon": [
-        "cbns1c-scan1",
-        "ERG_EDW_PROD.au2.ocm.s7134658.oraclecloudatcustomer.com",
+        "sbnsaxpa-scan1",
+        "EEDWHPR1.SRV",
     ],
 }
 
