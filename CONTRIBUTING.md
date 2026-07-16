@@ -122,7 +122,6 @@ from tenacity import retry
 # 3. Local package imports (absolute)
 from core import UpdateResult
 from domain.mapping_key import MappingKey
-from config.paths import MAPPING_FILES_DIR
 from logging_config import get_logger
  
 # 4. Relative imports (within same package)

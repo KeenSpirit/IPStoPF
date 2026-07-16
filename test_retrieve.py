@@ -27,9 +27,7 @@ def test(app):
         relay_lib = prot_lib.GetContents("ProtRelay")
         app.PrintPlain(f"relay_lib: {relay_lib}")
         # Server-side recursive fetch: one round-trip per ProtRelay folder
-        # instead of one per subfolder. The Python-level crawl
-        # (all_relevant_objects) took ~60 s co-located and 70+ min over
-        # WAN latency (Tablelands, 2026-07-15).
+        # instead of one per subfolder.
         dig_types = []
         for _folder in relay_lib or []:
             dig_types.extend(_folder.GetContents("*.TypRelay", 1) or [])

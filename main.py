@@ -127,7 +127,6 @@ from ips_data import query_database as qd
 from ips_data import ips_settings
 from update_powerfactory import orchestrator
 from core import UpdateResult
-import test_retrieve
 
 from importlib import reload
 
@@ -136,7 +135,6 @@ reload(pe)
 reload(ips_settings)
 reload(orchestrator)
 reload(pf_utils)
-reload(test_retrieve)
 
 from logging_config import setup_logging, get_logger
 
@@ -165,8 +163,6 @@ def main(app=None, batch=True):
     echo(app)
     # Enables the user to manually stop the script
     app.SetEnableUserBreak(1)
-
-    test_retrieve.test(app)
 
     try:
         # ======================================================================
