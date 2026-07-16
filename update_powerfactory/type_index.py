@@ -18,6 +18,8 @@ Usage:
     fuse_type = fuse_index.get_by_curve_and_rating("K", "100A")
 """
 
+import json
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Tuple
@@ -26,6 +28,32 @@ from utils.pf_utils import all_relevant_objects
 from logging_config import get_logger
 
 logger = get_logger(__name__)
+
+
+def _load_path_cache() -> Dict[str, str]:
+    """Load the DIgSILENT library path cache; empty dict on any failure."""
+    from config.paths import get_dig_lib_path_cache_file
+    try:
+        with open(get_dig_lib_path_cache_file(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return {str(k): str(v) for k, v in data.items()}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        pass
+    return {}
+
+
+def _save_path_cache(cache: Dict[str, str]) -> None:
+    """Persist the path cache; failure is logged, never fatal (batch safety)."""
+    from config.paths import get_dig_lib_path_cache_file
+    target = str(get_dig_lib_path_cache_file())
+    try:
+        tmp = target + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(cache, f, indent=2, sort_keys=True)
+        os.replace(tmp, target)
+    except OSError as exc:
+        logger.warning(f"Type index: could not save DIgSILENT path cache: {exc}")
 
 
 @dataclass
@@ -62,9 +90,11 @@ class RelayTypeIndex:
         Returns:
             RelayTypeIndex with all relay types indexed by name
         """
+
         index = cls()
 
-        # 1. Get relay types from ErgonLibrary
+        # ---- 1. ErgonLibrary Protection folder --------------------------
+        logger.info("Type index: walking ErgonLibrary Protection folder")
         global_library = app.GetGlobalLibrary()
         protection_lib = global_library.GetContents("Protection")
         ergon_types = all_relevant_objects(app, protection_lib, "*.TypRelay", None)
@@ -73,46 +103,100 @@ class RelayTypeIndex:
             name = relay_type.loc_name
             index._by_name[name] = relay_type
             index._all_types.append(relay_type)
+        logger.info(f"Type index: ErgonLibrary walk done ({len(index)} types)")
 
-        # 2. Get relay types from DIgSILENT library
+        # ---- 2. Current user's Protection folder (takes precedence) -----
+        # Moved ahead of the DIgSILENT pass so the 'missing' set below is
+        # computed against full Ergon+local precedence. Net precedence is
+        # unchanged: local > ErgonLibrary > DIgSILENT.
+        logger.info("Type index: walking current user's Protection folder")
+        current_user = app.GetCurrentUser()
+        protection_folder = current_user.GetContents("Protection")
+        local_types = all_relevant_objects(app, protection_folder, "*.TypRelay", None)
+
+        for relay_type in local_types or []:
+            name = relay_type.loc_name
+            if name not in index._by_name:
+                index._all_types.append(relay_type)
+            index._by_name[name] = relay_type  # local overrides library type
+        logger.info(f"Type index: local walk done ({len(index)} types total)")
+
+        # ---- 3. DIgSILENT library: targeted resolution only --------------
+        # Full crawls of this tree took ~60 s co-located and 70+ min over WAN
+        # latency (Tablelands, 2026-07-15). Only the mapped model names from
+        # type_mapping.csv column E can ever be looked up, so resolve just the
+        # ones not already supplied by ErgonLibrary/local, via a persisted
+        # name->path cache with a server-side filtered search as fallback.
+        #
+        # Function-level import: update_powerfactory/__init__ imports this
+        # module, so a top-level import of mapping_file would be circular at
+        # package-init time.
+        from update_powerfactory.mapping_file import mapped_relay_types
+
+        needed = mapped_relay_types()
+        missing = sorted(needed - set(index._by_name))
+        logger.info(
+            f"Type index: {len(missing)} mapped model(s) not in Ergon/local; "
+            f"resolving from DIgSILENT library"
+        )
+        if not missing:
+            return index
+
         try:
             database = global_library.fold_id
             dig_lib = database.GetContents("Lib")[0]
             prot_lib = dig_lib.GetContents("Prot")[0]
             relay_lib = prot_lib.GetContents("ProtRelay")
-            # Server-side recursive fetch: one round-trip per ProtRelay folder
-            # instead of one per subfolder.
-            dig_types = []
-            for _folder in relay_lib or []:
-                dig_types.extend(_folder.GetContents("*.TypRelay", 1) or [])
-            logger.info(
-                f"Type index: DIgSILENT library fetched "
-                f"({len(dig_types)} candidate types)"
-            )
-
-            for relay_type in dig_types or []:
-                name = relay_type.loc_name
-                if name not in index._by_name:
-                    index._by_name[name] = relay_type
-                    index._all_types.append(relay_type)
         except (IndexError, AttributeError):
-            pass
+            logger.warning(
+                f"Type index: DIgSILENT library not found; "
+                f"{len(missing)} mapped model(s) unresolved"
+            )
+            return index
 
-        # 3. Get local relay types (these take precedence)
-        current_user = app.GetCurrentUser()
-        protection_folder = current_user.GetContents("Protection")
-        local_types = all_relevant_objects(app, protection_folder, "*.TypRelay", None)
+        path_cache = _load_path_cache()
+        cache_dirty = False
+        cache_hits = 0
 
-        if local_types:
-            for relay_type in local_types:
-                name = relay_type.loc_name
-                if name not in index._by_name:
-                    # New type not in libraries
-                    index._by_name[name] = relay_type
-                    index._all_types.append(relay_type)
+        for name in missing:
+            obj = None
+
+            # Fast path: direct fetch via cached full path, no tree walk.
+            cached = path_cache.get(name)
+            if cached:
+                hit = global_library.SearchObject(cached)
+                if hit is not None and hit.loc_name == name:
+                    obj = hit
+                    cache_hits += 1
                 else:
-                    # Local type overrides library type
-                    index._by_name[name] = relay_type
+                    # Stale entry (library moved/renamed) - drop and re-resolve.
+                    path_cache.pop(name, None)
+                    cache_dirty = True
+
+            # Slow path: server-side name-filtered recursive search, then cache.
+            if obj is None:
+                for folder in relay_lib or []:
+                    hits = folder.GetContents(f"{name}.TypRelay", 1)
+                    if hits:
+                        obj = hits[0]
+                        path_cache[name] = obj.GetFullName()
+                        cache_dirty = True
+                        break
+
+            if obj is not None:
+                index._by_name[name] = obj
+                index._all_types.append(obj)
+            else:
+                logger.warning(
+                    f"Type index: mapped model '{name}' not found in any library"
+                )
+
+        logger.info(
+            f"Type index: DIgSILENT resolution done "
+            f"({cache_hits} via path cache, {len(missing) - cache_hits} via search)"
+        )
+        if cache_dirty:
+            _save_path_cache(path_cache)
 
         return index
 

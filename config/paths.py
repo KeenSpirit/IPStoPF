@@ -185,6 +185,18 @@ def get_type_mapping_file() -> Path:
     return TYPE_MAPPING_DIR / "type_mapping.csv"
 
 
+def get_dig_lib_path_cache_file() -> Path:
+    """
+    Get the full path to the DIgSILENT library path cache.
+
+    JSON mapping of relay model name -> full PowerFactory path, used by
+    RelayTypeIndex.build to fetch DIgSILENT-library types directly instead
+    of crawling the library tree. Lives next to type_mapping.csv so all
+    environments share one cache.
+    """
+    return TYPE_MAPPING_DIR / "dig_lib_paths.json"
+
+
 def get_relay_map_file(filename: str) -> Path:
     """
     Get the full path to a relay mapping file.

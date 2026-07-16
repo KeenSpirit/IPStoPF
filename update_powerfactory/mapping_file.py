@@ -271,6 +271,28 @@ def _load_type_mapping() -> Dict[str, Dict[Optional[str], Tuple[str, str]]]:
     return _type_mapping_cache
 
 
+def mapped_relay_types() -> Set[str]:
+    """
+    Return the PowerFactory relay model names referenced by type_mapping.csv.
+
+    Collects column E (relay type) across every CT-secondary variant of every
+    pattern whose Exclude flag (column B) is not "Yes". This is the complete
+    set of names RelayTypeIndex must be able to resolve; models for excluded
+    patterns are never looked up and are omitted.
+    """
+    mapping = _load_type_mapping()
+    excluded = _excluded_patterns_cache or set()
+
+    names: Set[str] = set()
+    for pattern_name, variants in mapping.items():
+        if pattern_name in excluded:
+            continue
+        for _mapping_filename, relay_type in variants.values():
+            if relay_type:
+                names.add(relay_type)
+    return names
+
+
 def _select_type_variant(
     variants: Dict[Optional[str], Tuple[str, str]],
     ct_secondary: Any = None

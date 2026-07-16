@@ -162,149 +162,148 @@ def main(app=None, batch=True):
     app.ClearOutputWindow()
 
     # Turn the echo off (suppress output window messages)
-    # TODO: Remember to uncomment echo
-    # echo(app)
+    echo(app)
     # Enables the user to manually stop the script
     app.SetEnableUserBreak(1)
 
     test_retrieve.test(app)
 
-    # try:
-    #     # ======================================================================
-    #     # CONFIGURATION VALIDATION
-    #     # ======================================================================
-    #     # Validate configuration before doing anything else.
-    #     # This catches issues early with clear error messages rather than
-    #     # failing mid-run with cryptic stack traces.
-    #
-    #     if batch or called_function:
-    #         # Batch mode: stricter validation, check database connectivity
-    #         result = validate_for_batch_mode(app)
-    #         if not result.is_valid:
-    #             app.PrintError("Configuration validation failed for batch mode")
-    #             for error in result.errors:
-    #                 app.PrintError(f"  {error}")
-    #             logger.error(f"Configuration validation failed: {result.errors}")
-    #             return None
-    #         # Print warnings but continue
-    #         for warning in result.warnings:
-    #             app.PrintWarn(warning)
-    #     else:
-    #         # Interactive mode: standard validation, faster startup
-    #         # require_valid_config() will exit automatically if invalid
-    #         require_valid_config(app)
-    #
-    #     # ======================================================================
-    #     # MAIN PROCESSING
-    #     # ======================================================================
-    #
-    #     # Determine which IPS database is to be queried
-    #     prjt = app.GetActiveProject()
-    #     if prjt is None:
-    #         app.PrintError("No active project selected. Activate a project to use this script")
-    #         logger.error("No active project selected")
-    #         raise qd.TransferError("No active project selected")
-    #     region = pf_utils.determine_region(prjt)
-    #
-    #     if region == "Subtransmission":
-    #         # Subtransmission requires the region/grid/element selection dialogs,
-    #         # so it is interactive-only. A batch/called invocation (e.g.
-    #         # IPStoPFMastering) bypasses the UI and must never enter this branch.
-    #         if called_function:
-    #             app.PrintPlain(
-    #                 "Subtransmission model skipped: interactive-only, not run in batch."
-    #             )
-    #             logger.info("Subtransmission project skipped (called_function mode)")
-    #             return
-    #         selected_region = ui.select_region()
-    #
-    #         if selected_region == "Energex":
-    #             # Obtain the IPS setting-ID data from the database (corporate cache query).
-    #             ips_records = qd.get_setting_id_records(app, ss.REGION)
-    #             ips = ii.ingest_ips_records(ips_records)
-    #
-    #             exg_grids_sorted = oag.all_egx_grids(app)
-    #             while True:
-    #                 selected_grid = ui.select_object(exg_grids_sorted)
-    #                 sites = []
-    #                 sites.extend(pe.process_elements(app, selected_grid))
-    #                 pf_result = pf_source.pf_refs_from_sites(sites)
-    #                 pf_result = ui.select_pf_elements(pf_result)
-    #                 if pf_result is ui.GO_BACK:
-    #                     continue
-    #                 break
-    #             result = recon.reconcile(ips.by_key, pf_result)
-    #             app.PrintPlain(result.coverage_summary())
-    #             report_path = write_reconciliation_report(result, paths.get_output_directory())
-    #             app.PrintPlain(f"Reconciliation report written to: {report_path}")
-    #
-    #             # --- apply matched settings to PowerFactory -------------------
-    #             set_ids, device_list = ss.build_devices_from_reconciliation(app, result)
-    #             app.PrintPlain(f"Built {len(device_list)} devices from {len(set_ids)} setting IDs")
-    #
-    #             data_capture_list: list[UpdateResult] = []
-    #         else:
-    #             batch = True
-    #             region = "Ergon"    # This enables the inactive-record filter in _should_skip_record.
-    #             ee_grids = oag.regional_grid(app, selected_region)
-    #             grid = ui.select_object(ee_grids)
-    #             device_list, data_capture_list = ips_settings.get_ips_settings(app, region, batch, called_function, grid)
-    #     else:
-    #         # Distribution model
-    #         # Query the IPS data
-    #         grid = None
-    #         device_list, data_capture_list = ips_settings.get_ips_settings(app, region, batch, called_function, grid)
-    #
-    #         logger.info(f"Devices found in IPS: {len(device_list)}")
-    #
-    #     # Update PowerFactory
-    #     data_capture_list, has_updates = up.update_pf(app, device_list, data_capture_list)
-    #
-    #     logger.info(f"Data capture list entries: {len(data_capture_list)}")
-    #     logger.info(f"Data capture list: {config_log_result(data_capture_list)}")
-    #     logger.info(f"Updates applied: {has_updates}")
-    #
-    #     # Create file to save script information
-    #     save_file = create_save_file(app, prjt, called_function)
-    #     if not save_file:
-    #         return
-    #     write_dict_list_to_csv(data_capture_list, save_file)
-    #
-    #     # Restore the echo so the outcome messages below are visible.
-    #     echo(app, off=False)
-    #     # Interactive only: Skip the work in batch.
-    #     if not called_function:
-    #         print_results(app, data_capture_list)
-    #
-    #     stop_time = get_current_timestamp()
-    #     app.PrintInfo(
-    #         f"Script started at {start_time} and finished at {stop_time}"
-    #     )
-    #     if has_updates:
-    #         app.PrintInfo("Of the devices selected there were updated settings")
-    #         logger.info("Script completed with updated settings")
-    #     else:
-    #         app.PrintInfo("Of the devices selected there were no updated settings")
-    #         logger.info("Script completed with no updated settings")
-    #
-    #     return has_updates
-    # except qd.TransferError as exc:
-    #     # Deliberate aborts: no setting-ID data, no active project, or
-    #     # user cancel. In batch, re-raise so the mastering layer records
-    #     # this project as failed and moves on. Interactively, stop
-    #     # cleanly - error_message has already displayed the reason via
-    #     # PrintError, so no traceback is needed.
-    #     if called_function:
-    #         raise
-    #     logger.error(f"Transfer aborted: {exc}")
-    #     return None
-    # finally:
-    #     # Always restore the echo and stop the timer.
-    #     # Restoring echo first ensures anything emitted here is visible;
-    #     # calling echo(off=False) a second time is harmless.
-    #     echo(app, off=False)
-    #     timer.stop()
-    #     app.PrintPlain(f"Query Script run time: {timer.formatted}")
+    try:
+        # ======================================================================
+        # CONFIGURATION VALIDATION
+        # ======================================================================
+        # Validate configuration before doing anything else.
+        # This catches issues early with clear error messages rather than
+        # failing mid-run with cryptic stack traces.
+
+        if batch or called_function:
+            # Batch mode: stricter validation, check database connectivity
+            result = validate_for_batch_mode(app)
+            if not result.is_valid:
+                app.PrintError("Configuration validation failed for batch mode")
+                for error in result.errors:
+                    app.PrintError(f"  {error}")
+                logger.error(f"Configuration validation failed: {result.errors}")
+                return None
+            # Print warnings but continue
+            for warning in result.warnings:
+                app.PrintWarn(warning)
+        else:
+            # Interactive mode: standard validation, faster startup
+            # require_valid_config() will exit automatically if invalid
+            require_valid_config(app)
+
+        # ======================================================================
+        # MAIN PROCESSING
+        # ======================================================================
+
+        # Determine which IPS database is to be queried
+        prjt = app.GetActiveProject()
+        if prjt is None:
+            app.PrintError("No active project selected. Activate a project to use this script")
+            logger.error("No active project selected")
+            raise qd.TransferError("No active project selected")
+        region = pf_utils.determine_region(prjt)
+
+        if region == "Subtransmission":
+            # Subtransmission requires the region/grid/element selection dialogs,
+            # so it is interactive-only. A batch/called invocation (e.g.
+            # IPStoPFMastering) bypasses the UI and must never enter this branch.
+            if called_function:
+                app.PrintPlain(
+                    "Subtransmission model skipped: interactive-only, not run in batch."
+                )
+                logger.info("Subtransmission project skipped (called_function mode)")
+                return
+            selected_region = ui.select_region()
+
+            if selected_region == "Energex":
+                # Obtain the IPS setting-ID data from the database (corporate cache query).
+                ips_records = qd.get_setting_id_records(app, ss.REGION)
+                ips = ii.ingest_ips_records(ips_records)
+
+                exg_grids_sorted = oag.all_egx_grids(app)
+                while True:
+                    selected_grid = ui.select_object(exg_grids_sorted)
+                    sites = []
+                    sites.extend(pe.process_elements(app, selected_grid))
+                    pf_result = pf_source.pf_refs_from_sites(sites)
+                    pf_result = ui.select_pf_elements(pf_result)
+                    if pf_result is ui.GO_BACK:
+                        continue
+                    break
+                result = recon.reconcile(ips.by_key, pf_result)
+                app.PrintPlain(result.coverage_summary())
+                report_path = write_reconciliation_report(result, paths.get_output_directory())
+                app.PrintPlain(f"Reconciliation report written to: {report_path}")
+
+                # --- apply matched settings to PowerFactory -------------------
+                set_ids, device_list = ss.build_devices_from_reconciliation(app, result)
+                app.PrintPlain(f"Built {len(device_list)} devices from {len(set_ids)} setting IDs")
+
+                data_capture_list: list[UpdateResult] = []
+            else:
+                batch = True
+                region = "Ergon"    # This enables the inactive-record filter in _should_skip_record.
+                ee_grids = oag.regional_grid(app, selected_region)
+                grid = ui.select_object(ee_grids)
+                device_list, data_capture_list = ips_settings.get_ips_settings(app, region, batch, called_function, grid)
+        else:
+            # Distribution model
+            # Query the IPS data
+            grid = None
+            device_list, data_capture_list = ips_settings.get_ips_settings(app, region, batch, called_function, grid)
+
+            logger.info(f"Devices found in IPS: {len(device_list)}")
+
+        # Update PowerFactory
+        data_capture_list, has_updates = up.update_pf(app, device_list, data_capture_list)
+
+        logger.info(f"Data capture list entries: {len(data_capture_list)}")
+        logger.info(f"Data capture list: {config_log_result(data_capture_list)}")
+        logger.info(f"Updates applied: {has_updates}")
+
+        # Create file to save script information
+        save_file = create_save_file(app, prjt, called_function)
+        if not save_file:
+            return
+        write_dict_list_to_csv(data_capture_list, save_file)
+
+        # Restore the echo so the outcome messages below are visible.
+        echo(app, off=False)
+        # Interactive only: Skip the work in batch.
+        if not called_function:
+            print_results(app, data_capture_list)
+
+        stop_time = get_current_timestamp()
+        app.PrintInfo(
+            f"Script started at {start_time} and finished at {stop_time}"
+        )
+        if has_updates:
+            app.PrintInfo("Of the devices selected there were updated settings")
+            logger.info("Script completed with updated settings")
+        else:
+            app.PrintInfo("Of the devices selected there were no updated settings")
+            logger.info("Script completed with no updated settings")
+
+        return has_updates
+    except qd.TransferError as exc:
+        # Deliberate aborts: no setting-ID data, no active project, or
+        # user cancel. In batch, re-raise so the mastering layer records
+        # this project as failed and moves on. Interactively, stop
+        # cleanly - error_message has already displayed the reason via
+        # PrintError, so no traceback is needed.
+        if called_function:
+            raise
+        logger.error(f"Transfer aborted: {exc}")
+        return None
+    finally:
+        # Always restore the echo and stop the timer.
+        # Restoring echo first ensures anything emitted here is visible;
+        # calling echo(off=False) a second time is harmless.
+        echo(app, off=False)
+        timer.stop()
+        app.PrintPlain(f"Query Script run time: {timer.formatted}")
 
 
 def echo(app, off=True):
