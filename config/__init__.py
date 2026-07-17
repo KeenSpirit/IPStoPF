@@ -46,8 +46,6 @@ from config.paths import (
     CURVE_MAPPING_DIR,
     RELAY_MAPS_DIR,
     TYPE_MAPPING_DIR,
-    # Legacy path (deprecated)
-    MAPPING_FILES_DIR,
     # Output paths
     OUTPUT_BATCH_DIR,
     OUTPUT_LOCAL_DIR,
@@ -108,8 +106,6 @@ __all__ = [
     "CURVE_MAPPING_DIR",
     "RELAY_MAPS_DIR",
     "TYPE_MAPPING_DIR",
-    # Legacy (deprecated)
-    "MAPPING_FILES_DIR",
     # Output paths
     "OUTPUT_BATCH_DIR",
     "OUTPUT_LOCAL_DIR",

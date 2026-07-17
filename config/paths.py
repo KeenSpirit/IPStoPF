@@ -67,15 +67,6 @@ RELAY_MAPS_DIR = MAPPING_FILES_BASE / "relay_maps"
 # Type mapping (pattern -> relay type + mapping file)
 TYPE_MAPPING_DIR = MAPPING_FILES_BASE / "type_mapping"
 
-# Legacy path - kept for backward compatibility during migration
-# This points to the old network location
-MAPPING_FILES_DIR = os.path.join(
-    SCRIPTS_BASE,
-    "ScriptsDEV",
-    "IPSProtectionDeviceSettings",
-    "mapping"
-)
-
 # =============================================================================
 # Output Paths
 # =============================================================================
@@ -210,21 +201,6 @@ def get_relay_map_file(filename: str) -> Path:
     if not filename.endswith(".csv"):
         filename = f"{filename}.csv"
     return RELAY_MAPS_DIR / filename
-
-
-def get_mapping_file_path(filename: str) -> str:
-    """
-    Get the full path to a mapping file.
-
-    DEPRECATED: Use specific functions like get_relay_map_file() instead.
-
-    Args:
-        filename: Name of the mapping file (e.g., "type_mapping.csv")
-
-    Returns:
-        Full path to the mapping file
-    """
-    return os.path.join(MAPPING_FILES_DIR, filename)
 
 
 def add_external_library_paths() -> None:
