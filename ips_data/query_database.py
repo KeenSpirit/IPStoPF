@@ -412,9 +412,20 @@ def batch_get_ips_settings(app,
     """
     setting_id_dict: Dict[str, List[Dict]] = {sid: [] for sid in unique_ids}
 
+    n_chunks = (len(unique_ids) + _ORACLE_IN_LIMIT - 1) // _ORACLE_IN_LIMIT
+    fetch_start = time.perf_counter()
+    n_rows = 0
+
     cursor = connection.cursor()
     try:
-        for chunk in _chunked(unique_ids, _ORACLE_IN_LIMIT):
+        for chunk_no, chunk in enumerate(
+                _chunked(unique_ids, _ORACLE_IN_LIMIT), start=1
+        ):
+            logger.info(
+                f"ODS batch fetch: chunk {chunk_no}/{n_chunks} "
+                f"({len(chunk)} IDs) query started"
+            )
+            chunk_start = time.perf_counter()
             binds = {f"id{i}": sid for i, sid in enumerate(chunk)}
             in_clause = ", ".join(f":{name}" for name in binds)
             cursor.execute(sql.replace("{in_clause}", in_clause), binds)
@@ -425,14 +436,19 @@ def batch_get_ips_settings(app,
                 # Assumes the ODS returns relaysettingid in the same form as the
                 # IDs in unique_ids (as the legacy code did). If a KeyError ever
                 # surfaces here, a str() coercion on both sides is the fix.
-                setting_id_dict[record["relaysettingid"]].append(record)
+                    setting_id_dict[record["relaysettingid"]].append(record)
+                    n_rows += 1
+                logger.info(
+                    f"ODS batch fetch: chunk {chunk_no}/{n_chunks} done in "
+                    f"{time.perf_counter() - chunk_start:.1f} s"
+                )
     finally:
         cursor.close()
 
-    n_chunks = (len(unique_ids) + _ORACLE_IN_LIMIT - 1) // _ORACLE_IN_LIMIT
     logger.info(
-        f"ODS batch fetch: {len(unique_ids)} setting IDs in "
-        f"{n_chunks} query(ies)"
+        f"ODS batch fetch: {len(unique_ids)} setting IDs, {n_rows} setting "
+        f"rows kept, in {n_chunks} query(ies), "
+        f"{time.perf_counter() - fetch_start:.1f} s total"
     )
     return setting_id_dict
 

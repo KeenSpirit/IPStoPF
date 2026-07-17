@@ -23,6 +23,12 @@ from logging_config.logging_utils import (
     get_log_path,
 )
 
+from logging_config.stage_timing import (
+    stage,
+    log_stage_summary,
+    reset_stage_times,
+)
+
 from logging_config.configure_logging import (
     log_device_atts,
 )
@@ -32,4 +38,7 @@ __all__ = [
     "get_logger",
     "get_log_path",
     "log_device_atts",
+    "stage",
+    "log_stage_summary",
+    "reset_stage_times",
 ]

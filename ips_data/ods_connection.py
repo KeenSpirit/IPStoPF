@@ -22,8 +22,16 @@ or the database is unreachable) ``connect_to_db`` raises :class:`ODSUnavailable`
 so the caller can fall back to the slower NetDash path instead of failing.
 """
 
+import logging
+import time
+
 import yaml
-from tenacity import retry, stop_after_attempt, wait_random_exponential
+from tenacity import (
+    before_sleep_log,
+    retry,
+    stop_after_attempt,
+    wait_random_exponential,
+)
 
 from logging_config import get_logger
 
@@ -117,6 +125,7 @@ def determine_ips_db(region):
     reraise=True,
     stop=stop_after_attempt(3),
     wait=wait_random_exponential(multiplier=1, max=5),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
 )
 def _connect_with_retry(username, password, ips_db):
     """Open the oracledb connection, retrying transient failures only.
@@ -129,7 +138,13 @@ def _connect_with_retry(username, password, ips_db):
 
     tns = oracledb.makedsn(ips_db[0], ODS_PORT, service_name=ips_db[1])
     logger.info(f"Opening ODS connection to {ips_db[1]}")
-    return oracledb.connect(user=username, password=password, dsn=tns)
+    t0 = time.perf_counter()
+    connection = oracledb.connect(user=username, password=password, dsn=tns)
+    logger.info(
+        f"ODS connection to {ips_db[1]} established in "
+        f"{time.perf_counter() - t0:.1f} s"
+    )
+    return connection
 
 
 def connect_to_db(region):
