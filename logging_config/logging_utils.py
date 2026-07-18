@@ -43,8 +43,9 @@ import logging.handlers
 import json
 import os
 import queue
+import time
 import atexit
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Any, Dict
 
@@ -52,6 +53,10 @@ from typing import Optional, Any, Dict
 _logging_initialized = False
 _log_queue: Optional[queue.Queue] = None
 _queue_listener: Optional[logging.handlers.QueueListener] = None
+_log_file: Optional[Path] = None
+
+# Per-run log files accumulate; prune anything older than this.
+_LOG_RETENTION_DAYS = 30
 
 # Application logger prefixes - only these will log at INFO level
 # All other loggers (external libraries) will be set to WARNING
@@ -119,13 +124,21 @@ def setup_logging(log_level: int = logging.INFO) -> None:
     if _logging_initialized:
         return
 
-    # Create log directory and file path
+    # One log file per run: timestamp + PID means each process is the sole
+    # writer of its file. Overlapping runs previously interleaved writes
+    # into a single shared ips_to_pf.log, corrupting JSON lines (17
+    # fragment lines observed, 2026-07-16) - the queue serialises threads
+    # within this process, not other processes.
+    global _log_file
     log_dir = get_log_path()
-    log_file = log_dir / "ips_to_pf.log"
+    run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _log_file = log_dir / f"ips_to_pf_{run_stamp}_{os.getpid()}.log"
 
-    # Create rotating file handler (10MB max, keep 5 backups)
+    _prune_old_logs(log_dir)
+
+    # Rotation retained as a runaway guard within a single run
     file_handler = logging.handlers.RotatingFileHandler(
-        log_file,
+        _log_file,
         maxBytes=10 * 1024 * 1024,
         backupCount=5,
         delay=True
@@ -164,6 +177,36 @@ def setup_logging(log_level: int = logging.INFO) -> None:
 
     _logging_initialized = True
 
+    # First record in every file names the file - and doubles as the
+    # provenance line for which process wrote it.
+    init_logger = logging.getLogger("logging_config.logging_utils")
+    init_logger.setLevel(logging.INFO)
+    init_logger.info(f"Logging to {_log_file}")
+
+
+def get_current_log_file() -> Optional[Path]:
+    """Return this run's JSON log file path (None before setup_logging)."""
+    return _log_file
+
+
+def _prune_old_logs(log_dir: Path, keep_days: int = _LOG_RETENTION_DAYS) -> None:
+    """Best-effort deletion of per-run log files older than keep_days.
+
+    Per-run filenames mean rotation no longer caps aggregate disk use;
+    this does. A file locked by a still-live run fails to delete silently
+    and is retried by a later run.
+    """
+    cutoff = time.time() - keep_days * 86400
+    try:
+        for f in log_dir.glob("ips_to_pf_*.log*"):
+            try:
+                if f.stat().st_mtime < cutoff:
+                    f.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
+
 
 def _shutdown_logging() -> None:
     """Clean up logging resources on script exit."""
@@ -185,9 +228,12 @@ class _JsonFormatter(logging.Formatter):
         """Format log record as JSON."""
         # Build the log entry dictionary
         log_entry: Dict[str, Any] = {
-            "timestamp": datetime.fromtimestamp(
-                record.created, tz=timezone.utc
-            ).isoformat(),
+            # Local time WITH explicit UTC offset (e.g. +10:00): matches the
+            # console's wall clock for cross-referencing, stays ISO-sortable
+            # and machine-parsable, loses no information.
+            "timestamp": datetime.fromtimestamp(record.created)
+            .astimezone()
+            .isoformat(),
             "name": record.name,
             "level": record.levelname,
             "username": os.getenv("USERNAME", os.getenv("USER", "unknown")),
