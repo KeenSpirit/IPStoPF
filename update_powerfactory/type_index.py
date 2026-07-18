@@ -142,21 +142,10 @@ class RelayTypeIndex:
         if not missing:
             return index
 
-        try:
-            database = global_library.fold_id
-            dig_lib = database.GetContents("Lib")[0]
-            prot_lib = dig_lib.GetContents("Prot")[0]
-            relay_lib = prot_lib.GetContents("ProtRelay")
-        except (IndexError, AttributeError):
-            logger.warning(
-                f"Type index: DIgSILENT library not found; "
-                f"{len(missing)} mapped model(s) unresolved"
-            )
-            return index
-
         path_cache = _load_path_cache()
         cache_dirty = False
         cache_hits = 0
+        unresolved = []
 
         for name in missing:
             obj = None
@@ -173,27 +162,24 @@ class RelayTypeIndex:
                     path_cache.pop(name, None)
                     cache_dirty = True
 
-            # Slow path: server-side name-filtered recursive search, then cache.
-            if obj is None:
-                for folder in relay_lib or []:
-                    hits = folder.GetContents(f"{name}.TypRelay", 1)
-                    if hits:
-                        obj = hits[0]
-                        path_cache[name] = obj.GetFullName()
-                        cache_dirty = True
-                        break
-
-            if obj is not None:
-                index._by_name[name] = obj
-                index._all_types.append(obj)
-            else:
-                logger.warning(
-                    f"Type index: mapped model '{name}' not found in any library"
-                )
+                    # No live tree search at runtime: discovery is the offline
+                    # builder's job (build_relay_path_cache.py). A cache miss means
+                    # the builder has not run since the mapping/library changed.
+                    # 55 misses cost 6+ h of recursive WAN searches without ever
+                    # finishing (Stanthorpe, 2026-07-18) - never pay that mid-batch.
+                    if obj is not None:
+                        index._by_name[name] = obj
+                        index._all_types.append(obj)
+                    else:
+                        unresolved.append(name)
+                        logger.warning(
+                            f"Type index: mapped model '{name}' not in path cache; "
+                            f"run build_relay_path_cache.py to resolve it"
+                        )
 
         logger.info(
             f"Type index: DIgSILENT resolution done "
-            f"({cache_hits} via path cache, {len(missing) - cache_hits} via search)"
+            f"({cache_hits} via path cache, {len(unresolved)} unresolved)"
         )
         if cache_dirty:
             _save_path_cache(path_cache)

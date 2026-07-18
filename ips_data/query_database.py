@@ -426,21 +426,34 @@ def batch_get_ips_settings(app,
                 f"({len(chunk)} IDs) query started"
             )
             chunk_start = time.perf_counter()
+            chunk_raw = 0
+            chunk_kept = 0
+            sample_dropped = None
             binds = {f"id{i}": sid for i, sid in enumerate(chunk)}
             in_clause = ", ".join(f":{name}" for name in binds)
             cursor.execute(sql.replace("{in_clause}", in_clause), binds)
             for row in cursor:
+                chunk_raw += 1
                 record = dict(zip(_BATCH_COLS, row))
                 if skip_empty_setting and not record["proposedsetting"]:
+                    if sample_dropped is None:
+                        sample_dropped = record
                     continue
                 # Assumes the ODS returns relaysettingid in the same form as the
                 # IDs in unique_ids (as the legacy code did). If a KeyError ever
                 # surfaces here, a str() coercion on both sides is the fix.
-                    setting_id_dict[record["relaysettingid"]].append(record)
-                    n_rows += 1
-                logger.info(
-                    f"ODS batch fetch: chunk {chunk_no}/{n_chunks} done in "
-                    f"{time.perf_counter() - chunk_start:.1f} s"
+                setting_id_dict[record["relaysettingid"]].append(record)
+                chunk_kept += 1
+            n_rows += chunk_kept
+            logger.info(
+                f"ODS batch fetch: chunk {chunk_no}/{n_chunks} done in "
+                f"{time.perf_counter() - chunk_start:.1f} s "
+                f"({chunk_raw} rows fetched, {chunk_kept} kept)"
+            )
+            if chunk_raw and not chunk_kept and sample_dropped is not None:
+                logger.warning(
+                    f"ODS batch fetch: chunk {chunk_no} kept 0 of {chunk_raw} "
+                    f"rows; sample dropped row: {sample_dropped}"
                 )
     finally:
         cursor.close()
