@@ -23,6 +23,7 @@ Exit codes: 0 = all mapped models resolved; 1 = some unresolved (see log);
 2 = could not open PowerFactory / DIgSILENT library.
 """
 
+import logging
 import sys
 import time
 from pathlib import Path
@@ -51,6 +52,45 @@ def open_powerfactory():
         raise RuntimeError("GetApplicationExt returned None")
     return app
 
+def get_app():
+    """Return a PF app object in either execution context.
+
+    Inside PowerFactory (ComPython script, e.g. run from the Citrix GUI):
+    the ``powerfactory`` module is already importable and GetApplication()
+    returns the hosting session. From the command line (engine mode):
+    that import fails or returns None, and we start our own session.
+    Returns (app, hosted) where hosted=True means we are running inside
+    an existing PowerFactory GUI session.
+    """
+    try:
+        import powerfactory as pf
+        app = pf.GetApplication()
+        if app is not None:
+            return app, True
+    except ImportError:
+        pass
+    return open_powerfactory(), False
+
+
+class _PFOutputHandler(logging.Handler):
+    """Mirror log records into the PowerFactory output window.
+
+    Only attached in hosted mode - in engine mode the console shows the
+    stream handler output, and in both modes the JSON file log is written
+    by logging_config regardless.
+    """
+
+    def __init__(self, app):
+        super().__init__(level=logging.INFO)
+        self._app = app
+        self.setFormatter(logging.Formatter("%(message)s"))
+
+    def emit(self, record):
+        try:
+            self._app.PrintPlain(self.format(record))
+        except Exception:
+            pass  # never let output plumbing kill the builder
+
 
 def main(app) -> int:
     from logging_config import get_logger
@@ -63,6 +103,7 @@ def main(app) -> int:
 
     logger = get_logger("update_powerfactory.build_relay_path_cache")
     t_run = time.perf_counter()
+    logger.info(f"Path cache builder: running from {__file__} ({sys.executable})")
 
     needed = set(mapped_relay_types())
     logger.info(f"Path cache builder: {len(needed)} mapped model name(s)")
@@ -175,8 +216,25 @@ def main(app) -> int:
 
 if __name__ == "__main__":
     try:
-        pf_app = open_powerfactory()
+        pf_app, hosted = get_app()
     except Exception as exc:
         print(f"Could not open PowerFactory: {exc}")
         sys.exit(2)
-    sys.exit(main(pf_app))
+
+    pf_handler = None
+    if hosted:
+        pf_handler = _PFOutputHandler(pf_app)
+        logging.getLogger().addHandler(pf_handler)
+
+    try:
+        rc = main(pf_app)
+    finally:
+        if pf_handler is not None:
+            logging.getLogger().removeHandler(pf_handler)
+
+    if hosted:
+        # sys.exit inside a hosted script surfaces as a script error in the
+        # GUI; report the outcome in the output window instead.
+        pf_app.PrintPlain(f"build_relay_path_cache finished with code {rc}")
+    else:
+        sys.exit(rc)
