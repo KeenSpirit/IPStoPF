@@ -3,6 +3,13 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+# Import paths from config and add to sys.path
+from config.paths import ASSET_CLASSES_PATH
+
+sys.path.append(ASSET_CLASSES_PATH)
+import assetclasses
+from assetclasses.corporate_data import get_cached_data
+
 REPO_ROOT = Path(__file__).resolve().parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -44,3 +51,13 @@ for n, prefix in sorted(
     ((len(v), k) for k, v in idx._by_asset_prefix.items()), reverse=True
 )[:10]:
     print(f"  {prefix!r}: {n} records")
+
+from ips_data.query_database import get_cached_data
+
+it_rows = get_cached_data("Report-Cache-ProtectionITSettings-EE", max_age=3)
+print(f"\nIT report rows via cache layer: {len(it_rows) if it_rows else 0}")
+if it_rows:
+    it_ids = {r.relaysettingid for r in it_rows}
+    sid_ids = {r.get("relaysettingid") for r in rows}
+    print(f"distinct IT ids: {len(it_ids)}; "
+          f"overlap with setting-ID report: {len(it_ids & sid_ids)}")

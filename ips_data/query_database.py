@@ -521,11 +521,24 @@ def seq_get_ips_it_details(app, devices: List[str]) -> List:
 
     it_set_db = get_cached_data("Report-Cache-ProtectionITSettings-EX", max_age=3)
 
+    n_source = len(it_set_db) if it_set_db else 0
     ips_settings = []
     if it_set_db:
         for setting in it_set_db:
             if setting.relaysettingid in device_set:
                 ips_settings.append(setting)
+
+    if n_source == 0:
+        logger.warning(
+            "IT details (EE): cached report returned 0 rows - source empty "
+            "or unreachable; CT/VT data will be missing for ALL relays"
+        )
+    else:
+        logger.info(
+            f"IT details (EE): cached report returned {n_source} rows; "
+            f"{len(ips_settings)} matched this run's {len(device_set)} "
+            f"setting IDs"
+        )
 
     return ips_settings
 
@@ -548,11 +561,24 @@ def reg_get_ips_it_details(app, devices: List[str]) -> List:
 
     it_set_db = get_cached_data("Report-Cache-ProtectionITSettings-EE", max_age=3)
 
+    n_source = len(it_set_db) if it_set_db else 0
     ips_settings = []
     if it_set_db:
         for setting in it_set_db:
             if setting.relaysettingid in device_set:
                 ips_settings.append(setting)
+
+    if n_source == 0:
+        logger.warning(
+            "IT details (EE): cached report returned 0 rows - source empty "
+            "or unreachable; CT/VT data will be missing for ALL relays"
+        )
+    else:
+        logger.info(
+            f"IT details (EE): cached report returned {n_source} rows; "
+            f"{len(ips_settings)} matched this run's {len(device_set)} "
+            f"setting IDs"
+        )
 
     return ips_settings
 
