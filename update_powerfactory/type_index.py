@@ -162,20 +162,20 @@ class RelayTypeIndex:
                     path_cache.pop(name, None)
                     cache_dirty = True
 
-                    # No live tree search at runtime: discovery is the offline
-                    # builder's job (build_relay_path_cache.py). A cache miss means
-                    # the builder has not run since the mapping/library changed.
-                    # 55 misses cost 6+ h of recursive WAN searches without ever
-                    # finishing (Stanthorpe, 2026-07-18) - never pay that mid-batch.
-                    if obj is not None:
-                        index._by_name[name] = obj
-                        index._all_types.append(obj)
-                    else:
-                        unresolved.append(name)
-                        logger.warning(
-                            f"Type index: mapped model '{name}' not in path cache; "
-                            f"run build_relay_path_cache.py to resolve it"
-                        )
+            # No live tree search at runtime: discovery is the offline
+            # builder's job (build_relay_path_cache.py). A cache miss means
+            # the builder has not run since the mapping/library changed.
+            # 55 misses cost 6+ h of recursive WAN searches without ever
+            # finishing (Stanthorpe, 2026-07-18) - never pay that mid-batch.
+            if obj is not None:
+                index._by_name[name] = obj
+                index._all_types.append(obj)
+            else:
+                unresolved.append(name)
+                logger.warning(
+                    f"Type index: mapped model '{name}' not in path cache; "
+                    f"run build_relay_path_cache.py to resolve it"
+                )
 
         logger.info(
             f"Type index: DIgSILENT resolution done "
