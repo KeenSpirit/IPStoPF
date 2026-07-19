@@ -54,8 +54,8 @@ for n, prefix in sorted(
 
 from ips_data.query_database import get_cached_data
 
-it_rows = get_cached_data("Report-Cache-ProtectionITSettings-EE", max_age=3)
-print(f"\nIT report rows via cache layer: {len(it_rows) if it_rows else 0}")
+it_rows = list(get_cached_data("Report-Cache-ProtectionITSettings-EE", max_age=3) or [])
+print(f"\nIT report rows via cache layer: {len(it_rows)}")
 if it_rows:
     it_ids = {r.relaysettingid for r in it_rows}
     sid_ids = {r.get("relaysettingid") for r in rows}

@@ -519,14 +519,19 @@ def seq_get_ips_it_details(app, devices: List[str]) -> List:
     """
     device_set = set(devices)  # Convert to set for O(1) lookup
 
-    it_set_db = get_cached_data("Report-Cache-ProtectionITSettings-EX", max_age=3)
+    # get_cached_data returns a lazy generator: materialise it so the row
+    # count is knowable, exceptions surface here rather than mid-iteration,
+    # and a truthiness check is meaningful (a generator is always truthy,
+    # which is why an empty report previously read as a successful fetch).
+    it_set_db = list(
+        get_cached_data("Report-Cache-ProtectionITSettings-EX", max_age=3) or []
+    )
 
-    n_source = len(it_set_db) if it_set_db else 0
-    ips_settings = []
-    if it_set_db:
-        for setting in it_set_db:
-            if setting.relaysettingid in device_set:
-                ips_settings.append(setting)
+    n_source = len(it_set_db)
+    ips_settings = [
+        setting for setting in it_set_db
+        if setting.relaysettingid in device_set
+    ]
 
     if n_source == 0:
         logger.warning(
@@ -559,14 +564,19 @@ def reg_get_ips_it_details(app, devices: List[str]) -> List:
     """
     device_set = set(devices)  # Convert to set for O(1) lookup
 
-    it_set_db = get_cached_data("Report-Cache-ProtectionITSettings-EE", max_age=3)
+    # get_cached_data returns a lazy generator: materialise it so the row
+    # count is knowable, exceptions surface here rather than mid-iteration,
+    # and a truthiness check is meaningful (a generator is always truthy,
+    # which is why an empty report previously read as a successful fetch).
+    it_set_db = list(
+        get_cached_data("Report-Cache-ProtectionITSettings-EE", max_age=3) or []
+    )
 
-    n_source = len(it_set_db) if it_set_db else 0
-    ips_settings = []
-    if it_set_db:
-        for setting in it_set_db:
-            if setting.relaysettingid in device_set:
-                ips_settings.append(setting)
+    n_source = len(it_set_db)
+    ips_settings = [
+        setting for setting in it_set_db
+        if setting.relaysettingid in device_set
+    ]
 
     if n_source == 0:
         logger.warning(
