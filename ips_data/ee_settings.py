@@ -10,6 +10,7 @@ The module uses SettingIndex for efficient O(1) lookups instead of
 linear scans through the settings list.
 """
 
+from collections import Counter
 from typing import Dict, List, Optional, Tuple, Any, Union
 
 from core import ProtectionDevice, SettingRecord, UpdateResult
@@ -19,6 +20,44 @@ from ips_data.setting_index import SettingIndex
 from logging_config import get_logger
 
 logger = get_logger(__name__)
+
+# Diagnostic tallies for the enumeration match layer (reset per batch run)
+_MATCH_STATS: Counter = Counter()
+_MATCH_OFFENDERS: List[Tuple[int, str, str, List[str]]] = []
+
+
+def _record_match(plant_number: str, source: str, records) -> None:
+    """Tally a match and flag candidates that sweep many asset records."""
+    n = len(records)
+    _MATCH_STATS[source] += 1
+    _MATCH_STATS[f"records_via_{source}"] += n
+    if n > 1:
+        samples = [r.assetname for r in records[:3]]
+        _MATCH_OFFENDERS.append((n, plant_number, source, samples))
+        if n > 5:
+            logger.warning(
+                f"Enumeration: plant number '{plant_number}' matched {n} "
+                f"asset records via {source} match, e.g. {samples}"
+            )
+
+
+def _log_match_summary(
+    n_candidates: int,
+    setting_ids: List[str],
+    list_of_devices: List,
+) -> None:
+    logger.info(
+        f"Enumeration summary: {n_candidates} candidates -> "
+        f"{len(list_of_devices)} devices, {len(setting_ids)} setting IDs "
+        f"({len(set(setting_ids))} unique)"
+    )
+    logger.info(f"Enumeration match sources: {dict(_MATCH_STATS)}")
+    for n, plant, source, samples in sorted(_MATCH_OFFENDERS, reverse=True)[:10]:
+        logger.info(
+            f"Enumeration offender: '{plant}' -> {n} records ({source}), "
+            f"e.g. {samples}"
+        )
+
 
 def ee_device_list(
     app,
@@ -111,6 +150,8 @@ def ergon_all_dev_list(
     Returns:
         Tuple of (setting_ids, list_of_devices, data_capture_list)
     """
+    _MATCH_STATS.clear()
+    _MATCH_OFFENDERS.clear()
     prot_devices = get_all_protection_devices(app)
     list_of_devices: List[ProtectionDevice] = []
     setting_ids: List[str] = []
@@ -159,6 +200,8 @@ def ergon_all_dev_list(
             setting_index=setting_index,
             batch=batch,
         )
+
+    _log_match_summary(len(prot_devices), setting_ids, list_of_devices)
 
     return setting_ids, list_of_devices, data_capture_list
 
@@ -297,6 +340,7 @@ def _get_setting_id_indexed(
     exact_matches = setting_index.get_by_asset_exact(plant_number)
 
     if exact_matches:
+        _record_match(plant_number, "exact", exact_matches)
         # Found exact match - use it
         for record in exact_matches:
             device = _create_device_from_record(
@@ -311,6 +355,14 @@ def _get_setting_id_indexed(
     partial_matches = setting_index.get_by_asset_contains(plant_number)
 
     if partial_matches:
+        # Distinguish which fallback inside get_by_asset_contains fired.
+        # (Reads a private index attr - diagnostic only, remove with the fix.)
+        source = (
+            "prefix"
+            if setting_index._by_asset_prefix.get(plant_number)
+            else "substring"
+        )
+        _record_match(plant_number, source, partial_matches)
         # Handle multiple devices in a single cubicle
         pf_device_name = pf_device.loc_name
 
@@ -334,6 +386,7 @@ def _get_setting_id_indexed(
             return setting_ids, list_of_devices
 
     # No match found - create device without settings
+    _MATCH_STATS["no_match"] += 1
     no_setting_device = ProtectionDevice(
         app, None, None, None, None, pf_device, None
     )

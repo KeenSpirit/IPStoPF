@@ -28,3 +28,19 @@ for asset, n in per_asset.most_common(5):
     for r in [x for x in rows if x.get("assetname") == asset][:10]:
         print(f"    id={r.get('relaysettingid')}  date={r.get('datesetting')}  "
               f"pattern={r.get('patternname')}")
+
+from ips_data.setting_index import create_setting_index
+
+idx = create_setting_index(rows, "Ergon")
+print(f"\nindex records after filtering: {len(idx)}")
+print("active values in report:", dict(Counter(r.get("active") for r in rows)))
+
+# How promiscuous is the prefix index?
+bucket_sizes = Counter(len(v) for v in idx._by_asset_prefix.values())
+print("prefix bucket size histogram (bucket_size: n_prefixes):",
+      dict(sorted(bucket_sizes.items())[-10:]))
+print("\n10 largest prefix buckets:")
+for n, prefix in sorted(
+    ((len(v), k) for k, v in idx._by_asset_prefix.items()), reverse=True
+)[:10]:
+    print(f"  {prefix!r}: {n} records")
