@@ -256,7 +256,12 @@ class SettingIndex:
         if prefix_matches:
             return prefix_matches
 
-        # Fall back to substring search (slower but necessary for some cases)
+        # Fall back to substring search (slower; covers plant numbers that
+        # appear mid-asset-name). Fenced: tokens shorter than 6 chars are
+        # too promiscuous for a region-wide substring scan - 'RC-' matched
+        # 2,948 assets (Stanthorpe, 2026-07-19).
+        if len(device_name) < 6:
+            return []
         results = []
         for asset_name, records in self._by_asset_exact.items():
             if device_name in asset_name:

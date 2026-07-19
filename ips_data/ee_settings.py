@@ -21,9 +21,25 @@ from logging_config import get_logger
 
 logger = get_logger(__name__)
 
+# No plausible single cubicle holds more matches than this; beyond it the
+# identifier is degenerate and the match set is garbage.
+_MAX_PARTIAL_MATCHES = 10
+
 # Diagnostic tallies for the enumeration match layer (reset per batch run)
 _MATCH_STATS: Counter = Counter()
 _MATCH_OFFENDERS: List[Tuple[int, str, str, List[str]]] = []
+
+
+def _is_usable_plant_number(plant_number: Optional[str]) -> bool:
+    """Reject identifiers too degenerate to match safely.
+
+    A bare prefix like 'RC-' substring-matched 2,948 asset records
+    (every recloser in the region) on 2026-07-19. Real plant numbers
+    contain digits and are at least 4 characters.
+    """
+    if not plant_number or len(plant_number) < 4:
+        return False
+    return any(ch.isdigit() for ch in plant_number)
 
 
 def _record_match(plant_number: str, source: str, records) -> None:
@@ -92,7 +108,12 @@ def ee_device_list(
         plant_number = get_plant_number(device_name)
         pf_device = device_dict[device_name][0]
 
-        if not plant_number:
+        if not _is_usable_plant_number(plant_number):
+            if plant_number:
+                logger.warning(
+                    f"Enumeration: device '{pf_device.loc_name}' yields "
+                    f"unusable plant number '{plant_number}'; skipping match"
+                )
             data_capture_list.append(
                 UpdateResult.info_record(pf_device, "Not a protection device")
             )
@@ -167,7 +188,12 @@ def ergon_all_dev_list(
 
         plant_number = get_plant_number(pf_device.loc_name)
 
-        if not plant_number:
+        if not _is_usable_plant_number(plant_number):
+            if plant_number:
+                logger.warning(
+                    f"Enumeration: device '{pf_device.loc_name}' yields "
+                    f"unusable plant number '{plant_number}'; skipping match"
+                )
             data_capture_list.append(
                 UpdateResult.info_record(pf_device, "Not a protection device")
             )
@@ -353,6 +379,15 @@ def _get_setting_id_indexed(
 
     # Try partial match (device name contained in asset name)
     partial_matches = setting_index.get_by_asset_contains(plant_number)
+
+    if len(partial_matches) > _MAX_PARTIAL_MATCHES:
+        logger.warning(
+            f"Enumeration: '{plant_number}' (device '{pf_device.loc_name}') "
+            f"partial-matched {len(partial_matches)} asset records - "
+            f"implausible for one cubicle; treating as no IPS match"
+        )
+        _MATCH_STATS["capped"] += 1
+        partial_matches = []
 
     if partial_matches:
         # Distinguish which fallback inside get_by_asset_contains fired.
