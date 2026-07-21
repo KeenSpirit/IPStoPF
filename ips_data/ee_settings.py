@@ -319,6 +319,13 @@ def get_all_protection_devices(app) -> List:
         and relay.cpGrid.IsCalcRelevant()
         and relay.GetParent().GetClassName() == "StaCubic"
     ]
+    for relay in all_relays:
+        if relay not in relays:
+            logger.info(
+                f"Existing device {relay.loc_name} has been deleted. "
+                f"Reason: no parent cubicle or cpGid attribute"
+            )
+            relay.Delete()
 
     # Get all fuses that are active
     all_fuses = net_mod.GetContents("*.RelFuse", True)
