@@ -114,9 +114,41 @@ def ee_device_list(
                     f"Enumeration: device '{pf_device.loc_name}' yields "
                     f"unusable plant number '{plant_number}'; skipping match"
                 )
-            data_capture_list.append(
-                UpdateResult.info_record(pf_device, "Not a protection device")
-            )
+            # An ElmRelay with no parseable plant number can never match IPS, so
+            # reconcile it here rather than leaving it live (a type-less relay
+            # makes the downstream ComShc raise):
+            #   - no relay type assigned -> DELETE
+            #   - relay type assigned    -> set OUT OF SERVICE
+            # Non-relay devices keep the existing "Not a protection device" tag.
+            if pf_device.GetClassName() == "ElmRelay":
+                if pf_device.typ_id is None:
+                    data_capture_list.append(
+                        UpdateResult.info_record(
+                            pf_device,
+                            "Deleted - no relay type, not a protection device",
+                        )
+                    )
+                    logger.info(
+                        f"{pf_device.loc_name}: unparseable plant number and no "
+                        f"relay type - deleting relay"
+                    )
+                    pf_device.Delete()
+                else:
+                    pf_device.SetAttribute("outserv", 1)
+                    data_capture_list.append(
+                        UpdateResult.info_record(
+                            pf_device,
+                            "Set out of service - not a protection device",
+                        )
+                    )
+                    logger.info(
+                        f"{pf_device.loc_name}: unparseable plant number - "
+                        f"set out of service"
+                    )
+            else:
+                data_capture_list.append(
+                    UpdateResult.info_record(pf_device, "Not a protection device")
+                )
             continue
 
         # Handle non-relay devices (fuses)
@@ -194,9 +226,41 @@ def ergon_all_dev_list(
                     f"Enumeration: device '{pf_device.loc_name}' yields "
                     f"unusable plant number '{plant_number}'; skipping match"
                 )
-            data_capture_list.append(
-                UpdateResult.info_record(pf_device, "Not a protection device")
-            )
+            # An ElmRelay with no parseable plant number can never match IPS, so
+            # reconcile it here rather than leaving it live (a type-less relay
+            # makes the downstream ComShc raise):
+            #   - no relay type assigned -> DELETE
+            #   - relay type assigned    -> set OUT OF SERVICE
+            # Non-relay devices keep the existing "Not a protection device" tag.
+            if pf_device.GetClassName() == "ElmRelay":
+                if pf_device.typ_id is None:
+                    data_capture_list.append(
+                        UpdateResult.info_record(
+                            pf_device,
+                            "Deleted - no relay type, not a protection device",
+                        )
+                    )
+                    logger.info(
+                        f"{pf_device.loc_name}: unparseable plant number and no "
+                        f"relay type - deleting relay"
+                    )
+                    pf_device.Delete()
+                else:
+                    pf_device.SetAttribute("outserv", 1)
+                    data_capture_list.append(
+                        UpdateResult.info_record(
+                            pf_device,
+                            "Set out of service - not a protection device",
+                        )
+                    )
+                    logger.info(
+                        f"{pf_device.loc_name}: unparseable plant number - "
+                        f"set out of service"
+                    )
+            else:
+                data_capture_list.append(
+                    UpdateResult.info_record(pf_device, "Not a protection device")
+                )
             continue
 
         # Handle non-relay devices (fuses)
