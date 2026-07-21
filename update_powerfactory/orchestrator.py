@@ -93,7 +93,37 @@ def update_pf(
 
             # Handle devices not found in IPS
             if not device_object.setting_id and not device_object.fuse_type:
-                result = UpdateResult.not_in_ips(device_object)
+                pf_obj = device_object.pf_obj
+                # Reconcile existing relays that matched no IPS setting so they
+                # can't corrupt the downstream short-circuit study:
+                #   - no relay type assigned -> DELETE (a type-less ElmRelay
+                #     makes ComShc raise and can derail the SPA stage)
+                #   - relay type assigned    -> set OUT OF SERVICE
+                # Fuses keep the legacy "Not in IPS" tag and are left in place.
+                if pf_obj.GetClassName() == "ElmRelay":
+                    if pf_obj.typ_id is None:
+                        # Capture the result BEFORE Delete(); info_record reads
+                        # loc_name/cpGrid off the object, invalid once deleted.
+                        result = UpdateResult.info_record(
+                            pf_obj, "Deleted - no relay type, not in IPS"
+                        )
+                        logger.info(
+                            f"{pf_obj.loc_name}: no IPS match and no relay type "
+                            f"- deleting relay"
+                        )
+                        pf_obj.Delete()
+                        updates = True
+                    else:
+                        pf_obj.SetAttribute("outserv", 1)
+                        result = UpdateResult.info_record(
+                            pf_obj, "Set out of service - not in IPS"
+                        )
+                        logger.info(
+                            f"{pf_obj.loc_name}: no IPS match - set out of service"
+                        )
+                        updates = True
+                else:
+                    result = UpdateResult.not_in_ips(device_object)
                 results.append(result)
                 continue
 
