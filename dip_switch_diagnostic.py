@@ -229,6 +229,7 @@ def load_mapping(
     # Mirror read_mapping_file's per-device processing.
     device_name = pf_device.loc_name
     processed: List[List[str]] = []
+    blank_rows = 0
     for row in raw:
         if len(row) < 4:
             continue
@@ -243,9 +244,13 @@ def load_mapping(
             pr[0] = device_name
         while pr and pr[-1] == "":
             pr.pop()
+        if len(pr) < 4:
+            blank_rows += 1
+            continue
         processed.append(pr)
 
-    return processed, f"file '{mapping_filename}.csv'"
+    suffix = f" ({blank_rows} blank row(s) discarded)" if blank_rows else ""
+    return processed, f"file '{mapping_filename}.csv'{suffix}"
 
 
 # ==========================================================================
@@ -292,13 +297,16 @@ class Report:
 def _dip_element_names(mapping_file: List[List[str]]) -> List[str]:
     """Same rule as _get_dip_element_names()."""
     return list(dict.fromkeys(
-        line[1] for line in mapping_file if "_dip" in line[1]
+        line[1] for line in mapping_file
+        if len(line) > 1 and "_dip" in line[1]
     ))
-
 
 def _rows_for_element(mapping_file: List[List[str]], element_name: str) -> List[List[str]]:
     """Same substring rule as _find_dip_element_and_mappings()."""
-    return [line for line in mapping_file if element_name in line[1]]
+    return [
+        line for line in mapping_file
+        if len(line) > 1 and element_name in line[1]
+    ]
 
 
 def _find_pf_element(app, pf_device: Any, line: List[str]) -> Tuple[Any, str]:

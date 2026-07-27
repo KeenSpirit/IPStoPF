@@ -657,6 +657,13 @@ def read_mapping_file(
         while processed_row and processed_row[-1] == "":
             processed_row.pop()
 
+        # A row of nothing but commas survives the len(row) < 4 test above
+        # (it has cells; they are merely empty) and collapses to [] here.
+        # Every downstream consumer indexes [1] and [3] unconditionally, so
+        # such a row raises IndexError and kills the project mid-batch.
+        if len(processed_row) < 4:
+            continue
+
         mapping_file.append(processed_row)
 
     return mapping_file, relay_type
