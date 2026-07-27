@@ -629,9 +629,11 @@ def set_attribute(
                     # Could not coerce the IPS value to a number. The previous
                     # code wrote this sentinel silently; log it so a 9999 in the
                     # model is traceable to a device + attribute.
+                    device_name = device_object.pf_obj.loc_name
                     logger.warning(
-                        "set_attribute: could not convert %r for %s on %s; "
+                        "%s set_attribute: could not convert %r for %s on %s; "
                         "writing fallback 9999",
+                        device_name,
                         setting_value,
                         attribute,
                         getattr(element, "loc_name", "?"),

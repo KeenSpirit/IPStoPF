@@ -10,10 +10,8 @@ switch positions in the relay's logic element. The resulting configuration
 is a binary string (e.g., "10110") where each position represents a
 switch state.
 
-This module was extracted from relay_settings.py to:
-- Isolate dip switch logic from general relay settings
-- Fix mutation issues in the original implementation
-- Improve maintainability and testability
+This module will isolate dip switch logic from general relay settings
+
 
 Usage:
     from update_powerfactory.relay_logic_elements import update_logic_elements
@@ -123,12 +121,13 @@ def _process_dip_element(
     # Get and validate existing dip switch configuration
     existing_dip_set = pf_element.GetAttribute("e:aDipset")
 
+    device_name = pf_device.loc_name
     if len(existing_dip_set) != len(element_mapping):
         # Mismatch between mapping and actual element
         logger.warning(
-            "Dip switch count mismatch for %s: mapping has %d entries, "
+            " %s dip switch count mismatch for %s: mapping has %d entries, "
             "element has %d switches",
-            element_name, len(element_mapping), len(existing_dip_set)
+            device_name, element_name, len(element_mapping), len(existing_dip_set)
         )
         return
 
