@@ -82,7 +82,7 @@ def update_ct(
         # The following code clears the CT slot
         slot_objs = device_object.pf_obj.GetAttribute("pdiselm")
         for i, item in enumerate(device_object.pf_obj.GetAttribute("r:typ_id:e:pblk")):
-            if item.GetAttribute("filtmod") == "StaCt*":
+            if item.GetAttribute("filtmod") == "StaCt*"or item.GetAttribute("filtmod") == "StaCt*,StaCombi":
                 slot_objs[i] = None
                 break
         device_object.pf_obj.SetAttribute("pdiselm", slot_objs)

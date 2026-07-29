@@ -98,7 +98,7 @@ def _process_dip_element(
     """
     Process a single dip switch element.
 
-    Finds the PowerFactory element, collects relevant mapping lines,
+    Finds the PowerFactory elemedan.pnt, collects relevant mapping lines,
     and applies the calculated dip switch settings.
 
     Args:

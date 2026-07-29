@@ -64,7 +64,7 @@ def update_vt(
     if device_object.vt_secondary == 1:
         slot_objs = device_object.pf_obj.GetAttribute("pdiselm")
         for i, item in enumerate(device_object.pf_obj.GetAttribute("r:typ_id:e:pblk")):
-            if item.GetAttribute("filtmod") == "StaVt*":
+            if item.GetAttribute("filtmod") == "StaVt*" or item.GetAttribute("filtmod") == "StaVt*,StaCombi":
                 slot_objs[i] = None
                 break
         device_object.pf_obj.SetAttribute("pdiselm", slot_objs)
@@ -131,7 +131,8 @@ def update_vt_slots(app, device_object: Any) -> Any:
         if not item:
             continue
 
-        if item.GetAttribute("filtmod") == "StaVt*":
+        filtmod = item.GetAttribute("filtmod")
+        if filtmod == "StaVt*" or filtmod == "StaVt*,StaCombi":
             vt_obj = pf_device.GetSlot(item.GetAttribute("loc_name"))
             if not vt_obj:
                 vt_obj_name = "Not Configured"

@@ -610,7 +610,7 @@ def _report_path(device_name: str) -> str:
     if REPORT_DIR:
         base = REPORT_DIR
     else:
-        base = r"C:\LocalData\PowerFactory Output Folders\IPS Data Transfer"
+        base = r"//client/c$/LocalData/PowerFactory Output Folders/IPS Data Transfer"
         if not os.path.isdir(base):
             base = tempfile.gettempdir()
     safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in device_name)
