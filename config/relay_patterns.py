@@ -81,6 +81,11 @@ NOJA_RECLOSERS: List[str] = [
     "RC01",
     "EQL_RC10_RC20",
     "CMS_2.8.2",
+    "RC01ES_Energex"
+    "RC01ES"
+    "switch_RC01ES_Energex"
+    "RC10"
+    "Ergon_CMS_3.1.0.0"
 ]
 
 # =============================================================================
