@@ -128,6 +128,7 @@ def _get_selected_devices(
             device_list, failed_cbs, set_ids = ex.create_new_devices(
                 app, setting_index, batch
             )
+            ex.reconcile_orphan_relays(app, device_list, data_capture_list)
         else:
             # Add relay skeletons for Ergon
             if grid:

@@ -21,6 +21,9 @@ from logging_config import get_logger
 
 logger = get_logger(__name__)
 
+from utils.pf_utils import get_all_protection_devices
+
+
 def ex_device_list(
     app,
     selections: List[str],
@@ -569,3 +572,58 @@ def _create_device_from_record(
         prot_dev.fuse_type = "Line Fuse"
     
     return prot_dev
+
+
+def reconcile_orphan_relays(
+    app,
+    list_of_devices: List[ProtectionDevice],
+    data_capture_list: List[UpdateResult],
+) -> None:
+    """
+    Reconcile live ElmRelays that no IPS record accounts for.
+
+    create_new_devices() builds its device list from switches matched to
+    IPS, so a pre-existing relay with no IPS counterpart never reaches the
+    orchestrator's not_in_ips branch. _handle_unmatched_switch only cleans
+    cubicles whose switch matched *nothing*; a switch that matched any IPS
+    record - including a switch_* classification carrying no settings -
+    leaves every other relay in that cubicle intact.
+
+    Only valid after an exhaustive enumeration. A type-less relay left live
+    makes the downstream ComShc raise, so:
+      - no relay type assigned -> DELETE
+      - relay type assigned    -> set OUT OF SERVICE
+
+    get_all_protection_devices() already restricts to energised, in-service,
+    calculation-relevant devices, so anything returned here can reach ComShc.
+    """
+    matched = [d.pf_obj for d in list_of_devices if d.pf_obj]
+    live_devices, _ = get_all_protection_devices(app)
+
+    for pf_device in live_devices:
+        if pf_device.GetClassName() != "ElmRelay":
+            continue
+        if pf_device in matched:
+            continue
+
+        if pf_device.typ_id is None:
+            # info_record reads loc_name/cpGrid; capture BEFORE Delete()
+            data_capture_list.append(
+                UpdateResult.info_record(
+                    pf_device, "Deleted - no relay type, orphan (no IPS match)"
+                )
+            )
+            logger.info(
+                f"{pf_device.loc_name}: orphan relay, no relay type - deleting"
+            )
+            pf_device.Delete()
+        else:
+            pf_device.SetAttribute("outserv", 1)
+            data_capture_list.append(
+                UpdateResult.info_record(
+                    pf_device, "Set out of service - orphan (no IPS match)"
+                )
+            )
+            logger.info(
+                f"{pf_device.loc_name}: orphan relay - set out of service"
+            )
