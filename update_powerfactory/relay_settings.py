@@ -626,8 +626,7 @@ def set_attribute(
                         return True
                 except ValueError:
                     # Set to maximum as last resort
-                    # Could not coerce the IPS value to a number. The previous
-                    # code wrote this sentinel silently; log it so a 9999 in the
+                    # Could not coerce the IPS value to a number. log it so a 9999 in the
                     # model is traceable to a device + attribute.
                     device_name = device_object.pf_obj.loc_name
                     logger.warning(
