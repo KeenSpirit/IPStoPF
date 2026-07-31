@@ -40,47 +40,73 @@ def update_reclosing_logic(
     mapping_file: List[List],
     setting_dictionary: Dict[str, Any]
 ) -> None:
-    """
-    Update reclosing element logic based on trip settings.
-
-    The reclosing element has a logic table that controls outputs to
-    protection elements depending on the trip number. This function
-    updates each row with either Reclosing, Lockout, or Disable.
-
-    Args:
-        app: PowerFactory application object
-        device_object: The ProtectionDevice being configured
-        mapping_file: List of mapping file rows
-        setting_dictionary: Dictionary of all settings
-    """
     pf_device = device_object.pf_obj
     device_type = device_object.device
 
-    # Handle NOJA reclosers separately (different configuration approach)
-    if _is_noja_recloser(device_type):
-        _configure_noja_reclosing(
-            app, pf_device, mapping_file, setting_dictionary
+    element = _find_reclosing_element(app, pf_device, mapping_file)
+    if not element:
+        logger.warning(
+            " %s no RelRecl resolved from the mapping file; reclose logic "
+            "table left at default (all disabled)", pf_device.loc_name
         )
         return
 
-    # Standard reclosing logic configuration
-    element = _find_reclosing_element(app, pf_device, mapping_file)
-    if not element:
-        return
-
-    op_to_lockout = element.GetAttribute("e:oplockout")
     trip_setting = get_trip_num(app, mapping_file, setting_dictionary)
 
+    # NOJA patterns carry no _TripstoLockout row, so get_trip_num always
+    # returns 1 for them. Derive oplockout from the numeric _logic rows
+    # before building the table -- op_to_lockout sizes every row.
+    if _is_noja_recloser(device_type):
+        op_to_lockout = _noja_trips_to_lockout(mapping_file, setting_dictionary)
+        element.SetAttribute("e:oplockout", op_to_lockout)
+        logger.info(
+            " %s NOJA recloser: oplockout derived from IPS trip counts = %s",
+            pf_device.loc_name, op_to_lockout
+        )
+    else:
+        op_to_lockout = element.GetAttribute("e:oplockout")
+
+    if not op_to_lockout or op_to_lockout < 1:
+        logger.warning(
+            " %s reclosing element oplockout is %r; reclose logic table "
+            "left at default (all disabled)", pf_device.loc_name, op_to_lockout
+        )
+        return
+
     row_dict = _build_logic_rows(
-        app,
-        mapping_file,
-        setting_dictionary,
-        device_object,
-        op_to_lockout,
-        trip_setting
+        app, mapping_file, setting_dictionary,
+        device_object, op_to_lockout, trip_setting
     )
 
     _apply_logic_to_element(element, row_dict)
+
+
+def _noja_trips_to_lockout(
+    mapping_file: List[List],
+    setting_dictionary: Dict[str, Any],
+) -> int:
+    """
+    Derive trips-to-lockout for a NOJA recloser from its _logic rows.
+
+    The trip count is carried by the numeric rows (OC/EF "NumberofTrips");
+    the categorical rows ("D"/"L") carry no count. Floored at 1.
+    """
+    trips = 1
+
+    for mapped_set in mapping_file:
+        if "_logic" not in mapped_set[1]:
+            continue
+
+        setting = setting_dictionary.get(build_setting_key(mapped_set))
+
+        try:
+            value = int(float(setting))
+        except (TypeError, ValueError):
+            continue
+
+        trips = max(trips, value)
+
+    return trips
 
 
 def _is_noja_recloser(device_type: str) -> bool:
@@ -96,32 +122,6 @@ def _is_noja_recloser(device_type: str) -> bool:
         True if the device is a NOJA recloser
     """
     return any(noja in device_type for noja in NOJA_RECLOSERS)
-
-
-def _configure_noja_reclosing(
-    app,
-    pf_device: Any,
-    mapping_file: List[List],
-    setting_dictionary: Dict[str, Any]
-) -> None:
-    """
-    Configure reclosing for NOJA reclosers.
-
-    NOJA reclosers don't have a specific "number of trips to lockout" setting.
-    If a NOJA recloser isn't properly configured, the reclosing logic will
-    be left blank, which may cause PowerFactory to crash during fault analysis.
-
-    Args:
-        app: PowerFactory application object
-        pf_device: The PowerFactory relay object
-        mapping_file: List of mapping file rows
-        setting_dictionary: Dictionary of all settings
-    """
-    trip_setting = get_trip_num(app, mapping_file, setting_dictionary)
-
-    element = _find_element_by_name(app, pf_device, "Reclosing Element")
-    if element:
-        element.SetAttribute("e:oplockout", trip_setting)
 
 
 def _find_reclosing_element(
