@@ -25,6 +25,7 @@ Usage:
     update_reclosing_logic(app, device_object, mapping_file, setting_dict)
 """
 
+import re
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -32,6 +33,136 @@ from update_powerfactory.setting_utils import build_setting_key, setting_adjustm
 from config.relay_patterns import NOJA_RECLOSERS
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# NOJA per-trip reclose sequence
+# ---------------------------------------------------------------------------
+
+# IPS reclose codes -> PowerFactory ilogic values. The mapping is 1:1.
+NOJA_TRIP_CODES: Dict[str, float] = {
+    "r": 1.0,   # reclose
+    "l": 2.0,   # trip to lockout
+    "d": 0.0,   # element disabled for this trip
+}
+
+# RelRecl carries recltime1..recltime5 and hctrip1..hctrip5, so five trips is
+# the ceiling regardless of what IPS supplies (currently four).
+_MAX_RECLOSE_TRIPS = 5
+
+_TRIP_SUFFIX = re.compile(r"^(.*?)(\d+)\s*$")
+
+
+def _ips_setting_index(device_object: Any) -> Dict[tuple, str]:
+    """{(blockpath, paramname): value} over the device's raw IPS settings."""
+    index = {}
+    for setting in getattr(device_object, "settings", None) or []:
+        if len(setting) >= 3:
+            index[(setting[0], setting[1])] = setting[2]
+    return index
+
+
+def _noja_trip_sequences(
+    mapping_file: List[List],
+    device_object: Any,
+) -> Dict[str, List[float]]:
+    """
+    Read the full per-trip reclose sequence for each reclose block.
+
+    Each surviving ``_logic`` row addresses trip 1 of one block: column D
+    the IPS block path, column E the parameter name, e.g.
+    ``AR OCEF map: OC1+, Trip 1``. The trailing index is incremented to
+    walk the rest of the sequence, so one mapping row per block yields a
+    whole row of the ilogic table.
+
+    Returns {blockid: [float, ...]}, or {} when the mapping file does not
+    use trip-indexed parameter names (the CMS files) -- the signal to fall
+    back to the legacy single-value path.
+    """
+    index = _ips_setting_index(device_object)
+    if not index:
+        return {}
+
+    device_name = device_object.pf_obj.loc_name
+    sequences: Dict[str, List[float]] = {}
+
+    for mapped_set in mapping_file:
+        if "_logic" not in mapped_set[1] or len(mapped_set) < 5:
+            continue
+
+        blockid = mapped_set[2]
+        blockpath = mapped_set[3]
+        match = _TRIP_SUFFIX.match(str(mapped_set[4]))
+        if not match:
+            continue
+
+        stem, first_trip = match.group(1), int(match.group(2))
+
+        values = []
+        for trip in range(first_trip, first_trip + _MAX_RECLOSE_TRIPS):
+            raw = index.get((blockpath, "{}{}".format(stem, trip)))
+            if raw is None:
+                break
+            code = NOJA_TRIP_CODES.get(str(raw).strip().lower())
+            if code is None:
+                logger.warning(
+                    " %s reclose sequence: unrecognised value %r for %s "
+                    "trip %s; treated as disabled",
+                    device_name, raw, blockid, trip
+                )
+                code = 0.0
+            values.append(code)
+
+        if values:
+            sequences[blockid] = values
+
+    # A single resolved trip per block is what the legacy path already
+    # handles; only claim this path when a real sequence exists.
+    if not any(len(v) > 1 for v in sequences.values()):
+        return {}
+
+    return sequences
+
+
+def _noja_sequence_length(sequences: Dict[str, List[float]]) -> int:
+    """
+    Trips-to-lockout implied by the sequences.
+
+    A block locks out at the first trip carrying 2.0; the recloser's
+    sequence runs as long as the longest-running block. Blocks that never
+    trip (all 0.0) do not contribute. Floored at 1.
+    """
+    lengths = [1]
+
+    for values in sequences.values():
+        if not any(values):
+            continue
+        for i, value in enumerate(values):
+            if value == 2.0:
+                lengths.append(i + 1)
+                break
+        else:
+            # Never locks out within the supplied trips; the sequence has
+            # to end somewhere, so take its full length.
+            lengths.append(len(values))
+
+    return max(lengths)
+
+
+def _noja_logic_rows(
+    sequences: Dict[str, List[float]],
+    op_to_lockout: int,
+) -> Dict[str, List[float]]:
+    """Truncate or pad each sequence to op_to_lockout columns."""
+    row_dict = {}
+
+    for blockid, values in sequences.items():
+        row = (list(values) + [0.0] * op_to_lockout)[:op_to_lockout]
+        # The table must not ask PF to reclose past the final trip.
+        if any(row) and row[-1] == 1.0:
+            row[-1] = 2.0
+        row_dict[blockid] = row
+
+    return row_dict
 
 
 def update_reclosing_logic(
@@ -52,6 +183,28 @@ def update_reclosing_logic(
         return
 
     trip_setting = get_trip_num(app, mapping_file, setting_dictionary)
+
+    # Preferred NOJA path. The IPS reclose map carries an explicit R/L/D per
+    # element per trip, which is precisely the PF ilogic table -- both the
+    # sequence length and every cell come from it, so neither
+    # _noja_trips_to_lockout nor get_trip_num is consulted. Falls through to
+    # the legacy path for mapping files that do not carry a trip-indexed map.
+    if _is_noja_recloser(device_type):
+        sequences = _noja_trip_sequences(mapping_file, device_object)
+        if sequences:
+            op_to_lockout = _noja_sequence_length(sequences)
+            row_dict = _noja_logic_rows(sequences, op_to_lockout)
+            element.SetAttribute("e:oplockout", op_to_lockout)
+            logger.info(
+                " %s NOJA recloser: %s trips to lockout from the per-trip "
+                "IPS reclose map (%s of %s blocks resolved)",
+                pf_device.loc_name, op_to_lockout,
+                len(sequences), len(sequences)
+            )
+            _apply_logic_to_element(
+                element, row_dict, op_to_lockout, pf_device.loc_name
+            )
+            return
 
     # NOJA oplockout has two possible sources and neither is reliable alone:
     #   * _TripstoLockout rows (via get_trip_num) -- present in
