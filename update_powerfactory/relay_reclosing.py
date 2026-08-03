@@ -53,15 +53,21 @@ def update_reclosing_logic(
 
     trip_setting = get_trip_num(app, mapping_file, setting_dictionary)
 
-    # NOJA patterns carry no _TripstoLockout row, so get_trip_num always
-    # returns 1 for them. Derive oplockout from the numeric _logic rows
-    # before building the table -- op_to_lockout sizes every row.
+    # NOJA oplockout has two possible sources and neither is reliable alone:
+    #   * _TripstoLockout rows (via get_trip_num) -- present in
+    #     RC01ES_Energex_to_Noja Recloser.csv, absent from the CMS files.
+    #   * numeric _logic rows (_noja_trips_to_lockout) -- the reverse.
+    # Both floor at 1, so taking the larger picks up whichever the mapping
+    # file actually carries. op_to_lockout sizes every row of the table, so
+    # it must be settled before _build_logic_rows runs.
     if _is_noja_recloser(device_type):
-        op_to_lockout = _noja_trips_to_lockout(mapping_file, setting_dictionary)
+        logic_trips = _noja_trips_to_lockout(mapping_file, setting_dictionary)
+        op_to_lockout = max(logic_trips, trip_setting)
         element.SetAttribute("e:oplockout", op_to_lockout)
         logger.info(
-            " %s NOJA recloser: oplockout derived from IPS trip counts = %s",
-            pf_device.loc_name, op_to_lockout
+            " %s NOJA recloser: oplockout = %s "
+            "(_logic rows gave %s, _TripstoLockout rows gave %s)",
+            pf_device.loc_name, op_to_lockout, logic_trips, trip_setting
         )
     else:
         op_to_lockout = element.GetAttribute("e:oplockout")
@@ -78,7 +84,7 @@ def update_reclosing_logic(
         device_object, op_to_lockout, trip_setting
     )
 
-    _apply_logic_to_element(element, row_dict)
+    _apply_logic_to_element(element, row_dict, op_to_lockout, pf_device.loc_name)
 
 
 def _noja_trips_to_lockout(
@@ -349,10 +355,7 @@ def _build_single_row_logic(
     return logic_str
 
 
-def _apply_logic_to_element(
-    element: Any,
-    row_dict: Dict[str, List[float]]
-) -> None:
+def _apply_logic_to_element(element, row_dict, op_to_lockout, device_name=""):
     """
     Apply the logic row dictionary to the reclosing element.
 
@@ -367,14 +370,22 @@ def _apply_logic_to_element(
 
     block_ids = element.GetAttribute("r:typ_id:e:blockid")
 
-    # Replace row names with their logic values
-    for row_name, logic_values in row_dict.items():
-        block_ids = [
-            logic_values if x == row_name else x
-            for x in block_ids
-        ]
+    ilogic = []
+    unmapped = []
+    for block in block_ids:
+        values = row_dict.get(block)
+        if values is None:
+            unmapped.append(block)
+            values = [0.0] * op_to_lockout
+        ilogic.append([float(v) for v in values])
 
-    element.SetAttribute("e:ilogic", block_ids)
+    if unmapped:
+        logger.warning(
+            " %s reclose logic: no _logic row for %s; those blocks written "
+            "as disabled", device_name, ", ".join(unmapped)
+        )
+
+    element.SetAttribute("e:ilogic", ilogic)
 
     # If reclosing is not active, set to single operation lockout
     if element.GetAttribute("e:reclnotactive"):
