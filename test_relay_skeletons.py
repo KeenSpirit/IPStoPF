@@ -48,7 +48,8 @@ MODE = {
     "live": False,        # True -> actually run add_relay_skeletons (mutates)
     "reports_only": False,  # True -> skip everything needing PowerFactory
     "dump": False,        # True -> write a per-element join CSV
-    "debug": False,       # True -> DEBUG-level logging from ips_data.*
+    "debug": False,  # True -> DEBUG-level logging from ips_data.*
+    "recache": False,  # True -> force a live fetch, bypassing the cache
 }
 
 # Make the IPStoPF repo importable when run directly from anywhere.
@@ -201,7 +202,7 @@ def phase_provenance():
 # Phase 1 - report probe
 # ===========================================================================
 
-def phase_reports(ars):
+def phase_reports(ars, recache=False):
     """Fetch each report, materialise it, and report row counts and shape.
 
     get_cached_data returns a lazy generator, so a failure inside it surfaces
@@ -214,7 +215,10 @@ def phase_reports(ars):
         t0 = time.perf_counter()
         rows, error = [], None
         try:
-            rows = list(ars.get_cached_data(report=report, max_age=MAX_AGE) or [])
+            kwargs = {"report": report, "max_age": MAX_AGE}
+            if recache:
+                kwargs["recache"] = True
+            rows = list(ars.get_cached_data(**kwargs) or [])
         except Exception as exc:  # noqa: BLE001 - we want the class name
             error = f"{type(exc).__name__}: {exc}"
         elapsed = time.perf_counter() - t0
@@ -506,7 +510,7 @@ def main():
     outcomes = {}
     ars = phase_provenance()
 
-    reports, ok = phase_reports(ars)
+    reports, ok = phase_reports(ars, recache=mode["recache"])
     outcomes["reports"] = ok
 
     if mode["reports_only"]:
