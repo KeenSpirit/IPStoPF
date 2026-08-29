@@ -26,8 +26,8 @@ DISTRIBUTION:
       requested class found in the element's cubicles; ``setup_relay``
       then deletes near-duplicates by plant-number name matching. This
       purge behaviour is intentional for distribution models.
-    * ``ellipse_ecorp_asset_id_extraction`` pads the extracted id to
-      12 characters with leading zeros (ecorp asset-id format).
+    * ``ellipse_ecorp_asset_id_extraction`` returns the extracted id
+      unpadded, matching the List-* report asset-id keys.
 
 SUBTRANSMISSION:
     * Scans only the passed ``selected_grid`` and additionally includes
@@ -663,8 +663,8 @@ def ellipse_ecorp_asset_id_extraction(foreign_key: str, network_level: str):
         * Subtransmission strips a leading prefix such as "001:"
           (everything up to and including the first colon) before
           decoding, and returns the extracted id unpadded.
-        * Distribution does no prefix stripping and pads the result to
-          12 characters with leading zeros (ecorp asset-id format).
+        * Distribution does no prefix stripping. Both modes return the
+          extracted id unpadded, to match the List-* report keys.
     """
     # The remove list only needs to be those that end in a number
     remove_list = [
@@ -698,7 +698,7 @@ def ellipse_ecorp_asset_id_extraction(foreign_key: str, network_level: str):
     s = p.search(foreign_key)
     if s:
         if network_level == NETWORK_DISTRIBUTION:
-            return s.group().rjust(12, "0")
+            return s.group()
         return s.group()
     else:
         return None
