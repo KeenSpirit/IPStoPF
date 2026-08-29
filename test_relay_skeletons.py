@@ -47,7 +47,7 @@ from pathlib import Path
 MODE = {
     "live": False,        # True -> actually run add_relay_skeletons (mutates)
     "reports_only": False,  # True -> skip everything needing PowerFactory
-    "dump": False,        # True -> write a per-element join CSV
+    "dump": True,         # True -> write a per-element join CSV
     "debug": False,  # True -> DEBUG-level logging from ips_data.*
     "recache": False,  # True -> force a live fetch, bypassing the cache
 }
@@ -70,6 +70,10 @@ REPORTS = [
 ]
 
 MAX_AGE = 3  # matches the max_age used inside add_relay_skeletons
+
+# Print report rows mentioning this substation, so the key that SHOULD
+# match can be compared against the model's extracted ids. "" disables.
+FOCUS = "BALB"
 
 log = logging.getLogger("skeleton_test")
 
@@ -106,6 +110,18 @@ def setup_logging(debug=False):
     )
     handler.setLevel(logging.DEBUG if debug else logging.INFO)
     root.addHandler(handler)
+
+    logfile = REPO_ROOT / (
+        f"skeleton_test_{_dt.datetime.now():%Y%m%d_%H%M%S}.log"
+    )
+    fh = logging.FileHandler(logfile, encoding="utf-8")
+    fh.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+        datefmt="%H:%M:%S"
+    ))
+    fh.setLevel(logging.DEBUG if debug else logging.INFO)
+    root.addHandler(fh)
+    print(f"skeleton test logging to {logfile}")
     for ns in ("ips_data", "utils", "update_powerfactory", "skeleton_test"):
         logging.getLogger(ns).setLevel(
             logging.DEBUG if debug else logging.INFO
@@ -245,6 +261,15 @@ def phase_reports(ars, recache=False):
             lengths = sorted({len(str(k)) for k in keys})
             log.info(f"{'':<20} dict: {len(keys):,} keys, "
                      f"key length(s) {lengths}, sample {keys[:3]}")
+
+        if FOCUS and rows:
+            for row in rows:
+                text = " ".join(
+                    str(getattr(row, f, "")) for f in
+                    ("plant_no", "assetname", "ellipse_equip_no", "equip_no")
+                )
+                if FOCUS.upper() in text.upper():
+                    log.info(f"{'':<20} FOCUS {report}: {row!r}"[:400])
 
         results[label] = {
             "report": report, "rows": rows, "dict": d,
@@ -556,6 +581,6 @@ if __name__ == "__main__":
         rc = 2
     # sys.exit inside a hosted PF script surfaces as a script error; only the
     # command-line path should use it.
-    if sys.argv[1:] or not sys.stdin.isatty():
-        sys.exit(rc)
     print(f"skeleton test finished with code {rc}")
+    if sys.argv[1:]:
+        sys.exit(rc)
