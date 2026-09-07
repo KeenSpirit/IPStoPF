@@ -11,10 +11,12 @@ It includes:
 """
 
 from typing import Any, Optional
+from logging_config import get_logger
 
 from utils.pf_utils import all_relevant_objects
 from core import UpdateResult
 
+logger = get_logger(__name__)
 
 def get_ct_library(app) -> Any:
     """Find or create the local 'Current Transformers' library folder.
@@ -244,10 +246,21 @@ def check_update_measurement_elements(
         pf_device: The PowerFactory relay object
         secondary: The CT secondary rating
     """
-    measurement_elements = pf_device.GetContents("*.RelMeasure")
+    measurement_elements = pf_device.GetContents("*.RelMeasure", 1)
+
+    if not measurement_elements:
+        logger.warning(
+            f"{pf_device.loc_name}: no RelMeasure element found; Inom not set "
+            f"to CT secondary {secondary} A. Any pu pickup on this relay will "
+            f"convert against an incorrect base."
+        )
+        return
 
     for element in measurement_elements:
         try:
             element.SetAttribute("e:Inom", secondary)
         except AttributeError:
-            pass
+            logger.warning(
+                f"{pf_device.loc_name}/{element.loc_name}: could not set "
+                f"e:Inom to {secondary} A"
+            )
