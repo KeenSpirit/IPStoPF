@@ -165,12 +165,6 @@ def relay_settings(
         device_object.pf_obj.SetAttribute("outserv", 1)
         return result, updates
 
-    # Update CT and VT settings BEFORE any setting is written.
-    # Configuring the instrument transformers first means every pu
-    # setting is converted against the correct base.
-    result = cs.update_ct(app, device_object, result, ct_library)
-    result = vs.update_vt(app, device_object, result, vt_library)
-
     # Apply settings from mapping file
     updates = apply_settings(app, device_object, mapping_file, setting_dict, updates)
 
@@ -179,6 +173,12 @@ def relay_settings(
     update_logic_elements(
         app, device_object.pf_obj, mapping_file, setting_dict, find_element
     )
+
+    # Update CT and VT settings. The CT/VT library folders are resolved once
+    # per run by the orchestrator and threaded through here; passing None falls
+    # back to a per-call lookup (used by standalone callers and tests).
+    result = cs.update_ct(app, device_object, result, ct_library)
+    result = vs.update_vt(app, device_object, result, vt_library)
 
     return result, updates
 

@@ -97,7 +97,7 @@ def update_pf(
                 # Reconcile existing relays that matched no IPS setting so they
                 # can't corrupt the downstream short-circuit study:
                 #   - no relay type assigned -> DELETE (a type-less ElmRelay
-                #     makes ComShc raise)
+                #     makes ComShc raise and can derail the SPA stage)
                 #   - relay type assigned    -> set OUT OF SERVICE
                 # Fuses keep the legacy "Not in IPS" tag and are left in place.
                 if pf_obj.GetClassName() == "ElmRelay":
