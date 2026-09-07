@@ -23,6 +23,7 @@ from update_powerfactory import relay_settings as rs
 from update_powerfactory import fuse_settings as fs
 from update_powerfactory import ct_settings as cs
 from update_powerfactory import vt_settings as vs
+from update_powerfactory import pu_base_check as pbc
 from update_powerfactory.type_index import RelayTypeIndex, FuseTypeIndex
 from core import UpdateResult
 from config.relay_patterns import RELAYS_OOS
@@ -155,6 +156,16 @@ def update_pf(
         if app.IsWriteCacheEnabled():
             app.WriteChangesToDb()
             app.SetWriteCacheEnabled(0)
+
+    # Repair any pu pickup whose Ipsetr/cpIpset were derived against a stale
+    # base.
+    try:
+        pbc.finalise_pu_derivations(app, lst_of_devs)
+        app.WriteChangesToDb()
+    except Exception:
+        logger.exception(
+            "pu base finalisation failed; relay pickups were not verified"
+        )
 
     # Convert any existing dict entries and new results to dicts for output
     final_results = _convert_results_to_dicts(data_capture_list)
