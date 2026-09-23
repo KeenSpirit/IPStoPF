@@ -14,6 +14,21 @@ from typing import Any, Optional
 
 from utils.pf_utils import all_relevant_objects
 from core import UpdateResult
+from logging_config import get_logger
+
+logger = get_logger(__name__)
+
+
+# Slot filters treated as the relay's CT input. Deliberately the exact
+# strings the original code used: widening this would also match second CT
+# slots (neutral/SEF) and overwrite their CTs with the phase CT. Relay types
+# with other spellings are skipped with their filters logged instead.
+CT_SLOT_FILTERS = ("StaCt*", "StaCt*,StaCombi")
+
+
+def is_ct_slot(filtmod: Any) -> bool:
+    """True when a relay-type slot filter is one of CT_SLOT_FILTERS."""
+    return filtmod in CT_SLOT_FILTERS
 
 
 def get_ct_library(app) -> Any:
@@ -62,6 +77,14 @@ def update_ct(
 
     if device_object.pf_obj.typ_id.fold_id.loc_name == "Reclosers":
         current_trans = update_ct_slots(app, device_object)
+        if current_trans is None:
+            logger.warning(
+                f"{device_object.pf_obj.loc_name}: recloser type has no CT "
+                f"slot; CT not configured. Slot filters: "
+                f"{_slot_filters(device_object.pf_obj)}"
+            )
+            result.ct_result = "No CT slot on relay type"
+            return result
         # Check the type
         ct_type = current_trans.GetAttribute("e:typ_id")
         if not ct_type:
@@ -82,7 +105,7 @@ def update_ct(
         # The following code clears the CT slot
         slot_objs = device_object.pf_obj.GetAttribute("pdiselm")
         for i, item in enumerate(device_object.pf_obj.GetAttribute("r:typ_id:e:pblk")):
-            if item.GetAttribute("filtmod") == "StaCt*"or item.GetAttribute("filtmod") == "StaCt*,StaCombi":
+            if item and is_ct_slot(item.GetAttribute("filtmod")):
                 slot_objs[i] = None
                 break
         device_object.pf_obj.SetAttribute("pdiselm", slot_objs)
@@ -91,6 +114,14 @@ def update_ct(
 
     secondary = int(float(device_object.ct_secondary))
     current_trans = update_ct_slots(app, device_object)
+    if current_trans is None:
+        slots = _slot_filters(device_object.pf_obj)
+        logger.warning(
+            f"{device_object.pf_obj.loc_name}: relay type has no CT slot; "
+            f"CT {primary}/{secondary} not applied. Slot filters: {slots}"
+        )
+        result.ct_result = "No CT slot on relay type"
+        return result
     required_ct_type = select_ct_type(app, ct_library, primary, secondary)
 
     try:
@@ -114,6 +145,18 @@ def update_ct(
     check_update_measurement_elements(app, device_object.pf_obj, secondary)
 
     return result
+
+
+def _slot_filters(pf_device: Any) -> list:
+    """Slot names and filters of a relay type, for diagnostics only."""
+    try:
+        return [
+            (item.loc_name, item.GetAttribute("filtmod"))
+            for item in pf_device.GetAttribute("typ_id").GetAttribute("pblk")
+            if item
+        ]
+    except (AttributeError, TypeError):
+        return []
 
 
 def select_ct_type(
@@ -180,7 +223,7 @@ def update_ct_slots(app, device_object: Any) -> Any:
             continue
 
         filtmod = item.GetAttribute("filtmod")
-        if filtmod == "StaCt*" or filtmod == "StaCt*,StaCombi":
+        if is_ct_slot(filtmod):
             if item.loc_name in remote_ct_slot_names:
                 # Clear the remote CT slots. These get automatically populated
                 slot_objs[i] = None

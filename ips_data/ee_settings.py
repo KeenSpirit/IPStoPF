@@ -29,6 +29,15 @@ _MAX_PARTIAL_MATCHES = 10
 _MATCH_STATS: Counter = Counter()
 _MATCH_OFFENDERS: List[Tuple[int, str, str, List[str]]] = []
 
+# (relay full name, setting ID) pairs already enumerated (reset per run)
+_CLAIMED: set = set()
+
+
+def _reset_enumeration_state() -> None:
+    _MATCH_STATS.clear()
+    _MATCH_OFFENDERS.clear()
+    _CLAIMED.clear()
+
 
 def _is_usable_plant_number(plant_number: Optional[str]) -> bool:
     """Reject identifiers too degenerate to match safely.
@@ -98,6 +107,7 @@ def ee_device_list(
     Returns:
         Tuple of (setting_ids, list_of_devices, data_capture_list)
     """
+    _reset_enumeration_state()
     list_of_devices: List[ProtectionDevice] = []
     setting_ids: List[str] = []
 
@@ -203,8 +213,7 @@ def ergon_all_dev_list(
     Returns:
         Tuple of (setting_ids, list_of_devices, data_capture_list)
     """
-    _MATCH_STATS.clear()
-    _MATCH_OFFENDERS.clear()
+    _reset_enumeration_state()
     prot_devices = get_all_protection_devices(app)
     list_of_devices: List[ProtectionDevice] = []
     setting_ids: List[str] = []
@@ -375,21 +384,53 @@ def get_all_protection_devices(app) -> List:
     """
     net_mod = app.GetProjectFolder("netmod")
 
-    # Get all relays that are in valid locations and active
+    # The recursive walk returns every ElmRelay in the network model,
+    # including the sub-relays that multi-function relay types carry
+    # *inside* the parent ElmRelay (e.g. 'Trip 1'..'Trip 4', 'Curve 1'..'4',
+    # 'Phase Time-Overcurrent', 'Close/Reclose Logic'). Those are part of
+    # the parent relay's model, never standalone devices, and must be left
+    # alone - deleting them strips the parent relay's protection functions
+    # (Gladstone, 2026-09-23: ~270 sub-relays deleted this way).
     all_relays = net_mod.GetContents("*.ElmRelay", True)
-    relays = [
-        relay for relay in all_relays
-        if relay.GetAttribute("cpGrid")
-        and relay.cpGrid.IsCalcRelevant()
-        and relay.GetParent().GetClassName() == "StaCubic"
-    ]
+
+    relays = []
+    orphans = []
+    n_nested = 0
+    n_inactive_grid = 0
     for relay in all_relays:
-        if relay not in relays:
-            logger.info(
-                f"Existing device {relay.loc_name} has been deleted. "
-                f"Reason: no parent cubicle or cpGid attribute"
-            )
-            relay.Delete()
+        parent_class = relay.GetParent().GetClassName()
+        # Fast path: a relay directly in a cubicle cannot be nested, so the
+        # ancestor walk (extra PF calls) only runs for the rest.
+        if parent_class != "StaCubic" and _inside_relay(relay):
+            n_nested += 1
+            continue
+        grid = relay.GetAttribute("cpGrid")
+        if parent_class != "StaCubic" or not grid:
+            orphans.append(relay)
+            continue
+        if not grid.IsCalcRelevant():
+            # Grid not active in the current study case. The relay is
+            # valid, it is just outside this study - skip it, never
+            # delete it.
+            n_inactive_grid += 1
+            continue
+        relays.append(relay)
+
+    # Top-level relays that are not in a cubicle or not in any grid are
+    # genuinely orphaned and cannot take part in a study.
+    for relay in orphans:
+        logger.info(
+            f"Orphaned relay {relay.loc_name} deleted: not in a cubicle or "
+            f"not in a grid"
+        )
+        relay.Delete()
+
+    logger.info(
+        f"Relay enumeration: {len(relays)} relays to process, "
+        f"{n_nested} sub-relays inside relays left untouched, "
+        f"{n_inactive_grid} relays in inactive grids skipped, "
+        f"{len(orphans)} orphaned relays deleted"
+    )
 
     # Get all fuses that are active
     all_fuses = net_mod.GetContents("*.RelFuse", True)
@@ -400,6 +441,25 @@ def get_all_protection_devices(app) -> List:
     ]
 
     return relays + fuses
+
+
+_CONTAINER_STOP = {"StaCubic", "ElmNet", "ElmSubstat", "ElmTrfstat",
+                   "IntPrjfolder", "ElmSite"}
+
+
+def _inside_relay(obj, max_depth: int = 8) -> bool:
+    """True if any ancestor of obj (up to its cubicle/grid) is an ElmRelay."""
+    parent = obj.GetParent()
+    for _ in range(max_depth):
+        if parent is None:
+            return False
+        cls = parent.GetClassName()
+        if cls == "ElmRelay":
+            return True
+        if cls in _CONTAINER_STOP:
+            return False
+        parent = parent.GetParent()
+    return False
 
 
 def _get_setting_id_indexed(
@@ -440,6 +500,8 @@ def _get_setting_id_indexed(
         _record_match(plant_number, "exact", exact_matches)
         # Found exact match - use it
         for record in exact_matches:
+            if not _claim(pf_device, record):
+                continue
             device = _create_device_from_record(
                 app, record, pf_device, fuse_type, fuse_size, batch
             )
@@ -469,18 +531,45 @@ def _get_setting_id_indexed(
             else "substring"
         )
         _record_match(plant_number, source, partial_matches)
-        # Handle multiple devices in a single cubicle
+
+        if pf_device.GetClassName() != "ElmRelay":
+            # A fuse is one device: never spawn ElmRelays in its cubicle.
+            # Use the most recent matching setting.
+            record = max(partial_matches, key=lambda r: str(r.datesetting or ""))
+            if len(partial_matches) > 1:
+                logger.warning(
+                    f"Enumeration: fuse '{pf_device.loc_name}' partial-matched "
+                    f"{len(partial_matches)} IPS assets "
+                    f"{[r.assetname for r in partial_matches[:5]]}; using "
+                    f"'{record.assetname}' (latest setting)"
+                )
+            if _claim(pf_device, record):
+                device = _create_device_from_record(
+                    app, record, pf_device, fuse_type, fuse_size, batch
+                )
+                if device:
+                    list_of_devices.append(device)
+                    setting_ids.append(record.relaysettingid)
+            return setting_ids, list_of_devices
+
+        # One cubicle may legitimately hold several IPS relay assets (e.g.
+        # per-phase electromechanical relays -OC-A/-OC-B/-OC-C plus -EF).
+        # Each gets its own ElmRelay in the cubicle, named after the asset.
         pf_device_name = pf_device.loc_name
+        original_used = False
 
         for record in partial_matches:
             asset_name = record.assetname
 
             # Try to find or create the appropriate PF device
-            target_device = _find_or_create_relay(
-                pf_device, pf_device_name, asset_name
+            target_device, renamed = _find_or_create_relay(
+                pf_device, pf_device_name, asset_name,
+                allow_rename=not original_used,
             )
+            if renamed or target_device == pf_device:
+                original_used = True
 
-            if target_device:
+            if target_device and _claim(target_device, record):
                 device = _create_device_from_record(
                     app, record, target_device, fuse_type, fuse_size, batch
                 )
@@ -488,8 +577,24 @@ def _get_setting_id_indexed(
                     list_of_devices.append(device)
                     setting_ids.append(record.relaysettingid)
 
-        if partial_matches:
-            return setting_ids, list_of_devices
+        if not original_used:
+            # Every IPS asset already has its own relay in this cubicle,
+            # so the bare plant-number relay is a superseded placeholder.
+            # Hand it to update_pf as a no-IPS-match device: deleted if it
+            # has no type, set out of service if it has one. Left alone it
+            # stays live with stale settings next to the real relays.
+            logger.info(
+                f"Enumeration: '{pf_device_name}' superseded by per-asset "
+                f"relays in the same cubicle; reconciling as no IPS match"
+            )
+            placeholder = ProtectionDevice(
+                app, None, None, None, None, pf_device, None
+            )
+            placeholder.fuse_type = fuse_type
+            placeholder.fuse_size = fuse_size
+            list_of_devices.append(placeholder)
+
+        return setting_ids, list_of_devices
 
     # No match found - create device without settings
     _MATCH_STATS["no_match"] += 1
@@ -546,35 +651,64 @@ def _create_device_from_record(
     return prot_dev
 
 
+def _claim(pf_obj, record: SettingRecord) -> bool:
+    """
+    Register a (PF relay, IPS setting) pairing; False if already taken.
+
+    A relay can be reached twice in one enumeration: once under its own
+    name (exact match) and once via a shorter plant number in the same
+    cubicle (prefix match). Without this guard the same setting was
+    applied to the same relay twice (GLFSSS-FB54-J01-OC-A/B/C,
+    Gladstone 2026-09-23).
+    """
+    key = (pf_obj.GetFullName(), record.relaysettingid)
+    if key in _CLAIMED:
+        _MATCH_STATS["duplicate_skipped"] += 1
+        return False
+    _CLAIMED.add(key)
+    return True
+
+
 def _find_or_create_relay(
     pf_device,
     pf_device_name: str,
-    asset_name: str
-):
+    asset_name: str,
+    allow_rename: bool = True,
+) -> Tuple[Any, bool]:
     """
     Find an existing relay with the asset name or create/rename one.
 
     This handles cases where multiple relays exist in a single cubicle.
+    An exact asset-name match anywhere in the cubicle always wins; only
+    then is the original relay renamed (at most once, while it still
+    carries its bare plant-number name), and only then is a new relay
+    created. The old single pass could rename the original onto a name
+    another relay in the cubicle already had.
 
     Args:
         pf_device: The original PowerFactory device
         pf_device_name: Original device name
         asset_name: The IPS asset name to match
+        allow_rename: False once the original has been used for another
+            asset in this cubicle
 
     Returns:
-        The PowerFactory device to use (existing, renamed, or new)
+        (PowerFactory relay to use, True if the original was renamed)
     """
     cubicle = pf_device.fold_id
+    relays = cubicle.GetContents("*.ElmRelay")
 
-    # Check if a device with this name already exists
-    for device in cubicle.GetContents("*.ElmRelay"):
+    for device in relays:
         if device.loc_name == asset_name:
-            return device
-        elif device.loc_name == pf_device_name:
-            # Rename the original device
-            device.loc_name = asset_name
-            return device
+            return device, False
 
-    # Create new device in the cubicle
-    return cubicle.CreateObject("ElmRelay", asset_name)
+    if allow_rename and pf_device.loc_name == pf_device_name:
+        pf_device.loc_name = asset_name
+        return pf_device, True
+
+    logger.info(
+        f"Enumeration: creating relay '{asset_name}' in cubicle of "
+        f"'{pf_device_name}'"
+    )
+    return cubicle.CreateObject("ElmRelay", asset_name), False
 

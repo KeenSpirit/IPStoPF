@@ -23,6 +23,31 @@ from config.region_config import (
 )
 
 
+_INACTIVE_TOKENS = {"false", "0", "n", "no"}
+
+
+def is_archived_asset(asset_name: Optional[str]) -> bool:
+    """True when an IPS asset name carries the ARCHIVED marker."""
+    return bool(asset_name) and "ARCHIVED" in asset_name.upper()
+
+
+def is_inactive_flag(active: Any) -> bool:
+    """
+    Interpret the report's 'active' field.
+
+    The cached report may deliver it as a bool, an int or a string, so an
+    identity test against ``False`` silently let '0'/'False' records
+    through. None (field absent) is treated as active.
+    """
+    if active is None:
+        return False
+    if isinstance(active, bool):
+        return not active
+    if isinstance(active, (int, float)):
+        return active == 0
+    return str(active).strip().lower() in _INACTIVE_TOKENS
+
+
 class SettingIndex:
     """
     Indexed container for IPS setting records providing O(1) lookups.
@@ -110,6 +135,14 @@ class SettingIndex:
         Returns:
             True if record should be skipped, False otherwise
         """
+        # Archived assets are decommissioned plant. IPS keeps their
+        # setting files but renames the asset, e.g.
+        # 'BILOSS-FB54-J01-EL(ARCHIVED)'. Left in the index they prefix-match
+        # the live plant number and get applied to (or create) a relay in
+        # the live cubicle (Gladstone, 2026-09-23).
+        if is_archived_asset(record.assetname):
+            return True
+
         if not record.patternname:
             return False
 
@@ -118,7 +151,7 @@ class SettingIndex:
             return True
 
         # Ergon: skip inactive records
-        if self.region == "Ergon" and record.active is False:
+        if self.region == "Ergon" and is_inactive_flag(record.active):
             return True
 
         return False

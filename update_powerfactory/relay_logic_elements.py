@@ -119,9 +119,17 @@ def _process_dip_element(
         return
 
     # Get and validate existing dip switch configuration
-    existing_dip_set = pf_element.GetAttribute("e:aDipset")
+    raw_dip_set = pf_element.GetAttribute("e:aDipset")
+    existing_dip_set, wrap_as_list = _normalise_dipset(raw_dip_set)
 
     device_name = pf_device.loc_name
+    if existing_dip_set is None:
+        logger.warning(
+            " %s dip switch set for %s is unreadable (%r); left unchanged",
+            device_name, element_name, raw_dip_set
+        )
+        return
+
     if len(existing_dip_set) != len(element_mapping):
         # Mismatch between mapping and actual element
         logger.warning(
@@ -136,7 +144,33 @@ def _process_dip_element(
         pf_element, element_mapping, setting_dict, existing_dip_set
     )
 
-    pf_element.SetAttribute("e:aDipset", new_dip_set)
+    # Write back in the same shape PowerFactory handed us.
+    pf_element.SetAttribute(
+        "e:aDipset", [new_dip_set] if wrap_as_list else new_dip_set
+    )
+
+
+def _normalise_dipset(raw: Any) -> Tuple[Optional[str], bool]:
+    """
+    Coerce the value read from ``e:aDipset`` into a switch string.
+
+    PowerFactory returns string-vector attributes as a list, so aDipset
+    comes back as ``['10110']`` rather than ``'10110'``. ``len()`` on
+    that list is 1, which is why every relay logged "element has 1
+    switches" (Gladstone/Beenleigh, 2026-09-23) and no dip switch was
+    ever written. ``_get_dip_names`` already unwraps ``sInput`` the same
+    way.
+
+    Returns:
+        (switch string or None if unreadable, True if the raw value was
+        a one-element list and must be written back as one)
+    """
+    if isinstance(raw, str):
+        return raw, False
+    if isinstance(raw, (list, tuple)) and len(raw) == 1 \
+            and isinstance(raw[0], str):
+        return raw[0], True
+    return None, False
 
 
 def _find_dip_element_and_mappings(

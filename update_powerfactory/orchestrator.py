@@ -139,6 +139,10 @@ def update_pf(
                     ct_library,
                     vt_library,
                 )
+            except rs.SettingRejectedError as e:
+                # Known data condition, not a code fault: one line, no
+                # traceback. Relay goes out of service as for any failure.
+                result = _handle_setting_rejected(device_object, e)
             except Exception as e:
                 result = _handle_device_error(app, device_object, e)
 
@@ -240,6 +244,24 @@ def _handle_device_error(
         pass # PowerFactory API error or missing object
 
     return UpdateResult.script_failed(device_object, error)
+
+
+def _handle_setting_rejected(
+        device_object: Any,
+        error: Exception
+) -> UpdateResult:
+    """Record a relay whose setting PowerFactory refused; take it OOS."""
+    logger.warning(
+        f"{device_object.pf_obj.loc_name}: setting rejected, relay set out "
+        f"of service: {error}"
+    )
+    try:
+        device_object.pf_obj.SetAttribute("outserv", 1)
+    except (AttributeError, RuntimeError, TypeError):
+        pass
+    result = UpdateResult.script_failed(device_object, error)
+    result.result = "Setting rejected"
+    return result
 
 
 def _switch_relay_oos(relays_oos: List[str], device_object: Any) -> None:

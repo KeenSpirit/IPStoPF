@@ -62,6 +62,33 @@ EARTH_FAULT_PATTERNS: Tuple[str, ...] = (
     "N-E", "N", "EF-E", "E-E", "DEF", "-EF"
 )
 
+# Pickup attributes. An IPS value of OFF/Disabled on one of these means the
+# protection element is disabled, which PowerFactory represents with the
+# element's outserv flag. Writing a placeholder pickup (the old 9999
+# fallback) left the element in service as far as studies were concerned.
+PICKUP_ATTRIBUTES = frozenset({"Ipset", "Ipsetr"})
+
+_OFF_TOKENS = frozenset({"off", "disabled", "disable"})
+
+
+class SettingRejectedError(RuntimeError):
+    """PowerFactory refused a converted setting value (usually out of range)."""
+
+
+def is_off_value(value: Any) -> bool:
+    """True when an IPS setting value means 'element disabled'."""
+    return isinstance(value, str) and value.strip().lower() in _OFF_TOKENS
+
+
+def _is_number(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    try:
+        float(value)
+        return True
+    except (TypeError, ValueError):
+        return False
+
 
 # =============================================================================
 # Main Entry Point
@@ -396,6 +423,7 @@ def create_setting_dictionary(
         Dictionary mapping attribute keys to setting values
     """
     setting_dictionary = {}
+    collisions = set()
 
     for setting in settings:
         lines = mapping_file
@@ -414,13 +442,20 @@ def create_setting_dictionary(
                 if line[index] == "use_setting":
                     key = build_setting_key(line)
                     # Apply unit conversions into a local; never mutate the row.
+                    # Non-numeric values (OFF, Disabled) pass through
+                    # unconverted for set_attribute/apply_settings to handle.
                     unit = setting[-1]
-                    if unit in ("mA", "ms"):
-                        converted = float(value) / 1000
-                    elif unit == "kA":
-                        converted = float(value) * 1000
-                    else:
+                    converted = value
+                    try:
+                        if unit in ("mA", "ms"):
+                            converted = float(value) / 1000
+                        elif unit == "kA":
+                            converted = float(value) * 1000
+                    except (TypeError, ValueError):
                         converted = value
+                    if key in setting_dictionary \
+                            and setting_dictionary[key] != converted:
+                        collisions.add(key)
                     setting_dictionary[key] = converted
                     continue
                 elif (
@@ -436,6 +471,16 @@ def create_setting_dictionary(
             if not prob_lines:
                 break
             lines = prob_lines
+
+    if collisions:
+        # Two different IPS settings resolved to the same PF attribute
+        # (e.g. one mapping row per setting group); the last one read wins.
+        logger.warning(
+            "%s: %d PF attribute(s) mapped from more than one IPS setting "
+            "with different values; last value used: %s",
+            getattr(pf_device, "loc_name", "?"), len(collisions),
+            sorted(collisions)[:10],
+        )
 
     return setting_dictionary
 
@@ -469,6 +514,16 @@ def apply_settings(
     """
     pf_device = device_object.pf_obj
 
+    # Elements whose in-service state is driven by a mapping 'outserv' row.
+    # Their state is left entirely to that row when re-enabling.
+    outserv_mapped = {
+        (line[0], line[1]) for line in mapping_file if line[2] == "outserv"
+    }
+    # (folder, element) -> PF element, for pickups that IPS says are OFF
+    # and pickups that carry a real value in this setting file.
+    disabled_elements: Dict[Tuple[str, str], Any] = {}
+    enabled_elements: Dict[Tuple[str, str], Any] = {}
+
     for mapped_set in mapping_file:
         # Skip logic elements (handled by sub-modules)
         if (
@@ -494,6 +549,17 @@ def apply_settings(
             else:
                 continue
 
+        if mapped_set[2] in PICKUP_ATTRIBUTES:
+            element_key = (mapped_set[0], mapped_set[1])
+            if is_off_value(setting):
+                # Element disabled in IPS: no pickup to write. Taken out
+                # of service after the loop so a later outserv row in the
+                # mapping cannot switch it back on.
+                disabled_elements[element_key] = element
+                continue
+            if _is_number(setting):
+                enabled_elements[element_key] = element
+
         attribute = f"e:{mapped_set[2]}"
         updates = set_attribute(
             app,
@@ -505,6 +571,52 @@ def apply_settings(
             setting_dict,
             updates,
         )
+
+    updates = _apply_pickup_enable_state(
+        pf_device, disabled_elements, enabled_elements, outserv_mapped,
+        updates,
+    )
+
+    return updates
+
+
+def _apply_pickup_enable_state(
+    pf_device: Any,
+    disabled_elements: Dict[Tuple[str, str], Any],
+    enabled_elements: Dict[Tuple[str, str], Any],
+    outserv_mapped: set,
+    updates: bool,
+) -> bool:
+    """
+    Reflect IPS OFF/Disabled pickups in the elements' outserv flag.
+
+    - Pickup OFF in IPS -> element out of service.
+    - Pickup has a real value but the element is out of service and no
+      mapping 'outserv' row owns its state -> logged only. The element may
+      be disabled by a dip/logic row or deliberately in the master model,
+      and IPS often keeps a numeric pickup on a disabled stage, so it is
+      not switched back on automatically.
+    """
+    device_name = pf_device.loc_name
+
+    for element_key, element in disabled_elements.items():
+        if element.GetAttribute("outserv") != 1:
+            element.SetAttribute("outserv", 1)
+            updates = True
+        logger.info(
+            "%s: %s pickup is OFF in IPS; element set out of service",
+            device_name, element.loc_name,
+        )
+
+    for element_key, element in enabled_elements.items():
+        if element_key in disabled_elements or element_key in outserv_mapped:
+            continue
+        if element.GetAttribute("outserv") == 1:
+            logger.info(
+                "%s: %s is out of service but has a pickup in IPS; "
+                "left out of service (review)",
+                device_name, element.loc_name,
+            )
 
     return updates
 
@@ -609,36 +721,44 @@ def set_attribute(
         existing_setting = element.GetAttribute(attribute)
         try:
             if setting_value != existing_setting:
-                element.SetAttribute(attribute, setting_value)
+                _set_or_reject(element, attribute, setting_value, device_object)
                 return True
+            return updates
         except TypeError:
-            # Try numeric conversions
-            try:
-                setting_value = float(setting_value)
-                if setting_value != round(existing_setting, 3):
-                    element.SetAttribute(attribute, setting_value)
-                    return True
-            except (ValueError, TypeError):
-                try:
-                    setting_value = int(setting_value)
-                    if setting_value != existing_setting:
-                        element.SetAttribute(attribute, setting_value)
-                        return True
-                except ValueError:
-                    # Set to maximum as last resort
-                    # Could not coerce the IPS value to a number. log it so a 9999 in the
-                    # model is traceable to a device + attribute.
-                    device_name = device_object.pf_obj.loc_name
-                    logger.warning(
-                        "%s set_attribute: could not convert %r for %s on %s; "
-                        "writing fallback 9999",
-                        device_name,
-                        setting_value,
-                        attribute,
-                        getattr(element, "loc_name", "?"),
-                    )
-                    element.SetAttribute(attribute, 9999)
-                    return updates
+            # The IPS value arrived as a string (or the wrong numeric type)
+            # for a numeric attribute: convert and retry below.
+            pass
+
+        try:
+            numeric = float(setting_value)
+        except (TypeError, ValueError):
+            # Not a number at all (e.g. OFF on a time attribute). Pickup
+            # OFF values never get here; apply_settings routes them to the
+            # element's outserv flag.
+            device_name = device_object.pf_obj.loc_name
+            logger.warning(
+                "%s set_attribute: could not convert %r for %s on %s; "
+                "writing fallback 9999",
+                device_name,
+                setting_value,
+                attribute,
+                getattr(element, "loc_name", "?"),
+            )
+            _set_or_reject(element, attribute, 9999, device_object)
+            return updates
+
+        try:
+            if numeric != round(existing_setting, 3):
+                _set_or_reject(element, attribute, numeric, device_object)
+                return True
+            return updates
+        except TypeError:
+            # Integer-typed attribute: PowerFactory rejects a float.
+            as_int = int(numeric)
+            if as_int != existing_setting:
+                _set_or_reject(element, attribute, as_int, device_object)
+                return True
+            return updates
     else:
         # Setting needs adjustment based on mapping file
         setting_value = setting_adjustment(app, line, setting_dictionary, device_object)
@@ -647,12 +767,38 @@ def set_attribute(
         existing_setting = element.GetAttribute(attribute)
         try:
             if setting_value != existing_setting:
-                element.SetAttribute(attribute, setting_value)
+                _set_or_reject(element, attribute, setting_value, device_object)
                 return True
         except TypeError:
             setting_value = int(setting_value)
             if setting_value != existing_setting:
-                element.SetAttribute(attribute, setting_value)
+                _set_or_reject(element, attribute, setting_value, device_object)
                 return True
 
     return updates
+
+
+def _set_or_reject(
+    element: Any,
+    attribute: str,
+    value: Any,
+    device_object: Any,
+) -> None:
+    """
+    SetAttribute, turning PowerFactory's refusal into a readable error.
+
+    PowerFactory raises AttributeError ("setting attribute 'e:Ipset' of
+    'DataObject' object failed") when a value of the right type is outside
+    the attribute's allowed range. That surfaced as a chained traceback with
+    no value in it. TypeError (wrong type) is left to propagate: callers use
+    it to retry with a converted value.
+    """
+    try:
+        element.SetAttribute(attribute, value)
+    except AttributeError:
+        raise SettingRejectedError(
+            f"{attribute}={value!r} rejected by PowerFactory on "
+            f"{getattr(element, 'loc_name', '?')} (out of range for this "
+            f"relay type?); CT {device_object.ct_primary}/"
+            f"{device_object.ct_secondary}"
+        ) from None
