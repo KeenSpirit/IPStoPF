@@ -20,10 +20,12 @@ logger = get_logger(__name__)
 
 
 # Slot filters treated as the relay's CT input. Deliberately the exact
-# strings the original code used: widening this would also match second CT
-# slots (neutral/SEF) and overwrite their CTs with the phase CT. Relay types
-# with other spellings are skipped with their filters logged instead.
-CT_SLOT_FILTERS = ("StaCt*", "StaCt*,StaCombi")
+# strings the original code used, plus plain 'StaCt' (the CT slot filter on
+# the ASEA RI 3OC and RXIDF 2H types; Gladstone 2026-09-24). A pattern match
+# would also catch second CT slots (neutral/SEF) and overwrite their CTs with
+# the phase CT. Relay types with other spellings are skipped with their
+# filters logged instead.
+CT_SLOT_FILTERS = ("StaCt*", "StaCt*,StaCombi", "StaCt")
 
 
 def is_ct_slot(filtmod: Any) -> bool:

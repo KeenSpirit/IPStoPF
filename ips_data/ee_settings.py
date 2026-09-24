@@ -17,6 +17,7 @@ from core import ProtectionDevice, SettingRecord, UpdateResult
 from utils.pf_utils import determine_fuse_role
 from ips_data import query_database as qd
 from ips_data.setting_index import SettingIndex
+from update_powerfactory.mapping_file import get_type_mapping
 from logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -561,11 +562,28 @@ def _get_setting_id_indexed(
         for record in partial_matches:
             asset_name = record.assetname
 
+            # Only create (or rename onto) a relay for an asset whose IPS
+            # pattern has a mapping file: otherwise the new relay can never
+            # be typed or set, and is left in the cubicle untyped
+            # ('RTU Recloser - Generic' A/R assets, CMGR12 SEL assets;
+            # Gladstone 2026-09-24).
+            mapped = _pattern_has_mapping(record.patternname)
+            if not mapped:
+                _MATCH_STATS["unmapped_asset_not_created"] += 1
+                logger.info(
+                    f"Enumeration: IPS asset '{asset_name}' (pattern "
+                    f"'{record.patternname}') has no mapping file in "
+                    f"type_mapping.csv; no relay created for it"
+                )
+
             # Try to find or create the appropriate PF device
             target_device, renamed = _find_or_create_relay(
                 pf_device, pf_device_name, asset_name,
-                allow_rename=not original_used,
+                allow_rename=not original_used and mapped,
+                allow_create=mapped,
             )
+            if target_device is None:
+                continue
             if renamed or target_device == pf_device:
                 original_used = True
 
@@ -669,11 +687,20 @@ def _claim(pf_obj, record: SettingRecord) -> bool:
     return True
 
 
+def _pattern_has_mapping(pattern_name: Optional[str]) -> bool:
+    """True if type_mapping.csv gives this IPS pattern a mapping file."""
+    if not pattern_name:
+        return False
+    mapping = get_type_mapping(pattern_name)
+    return bool(mapping and mapping[0])
+
+
 def _find_or_create_relay(
     pf_device,
     pf_device_name: str,
     asset_name: str,
     allow_rename: bool = True,
+    allow_create: bool = True,
 ) -> Tuple[Any, bool]:
     """
     Find an existing relay with the asset name or create/rename one.
@@ -691,6 +718,8 @@ def _find_or_create_relay(
         asset_name: The IPS asset name to match
         allow_rename: False once the original has been used for another
             asset in this cubicle
+        allow_create: False to only reuse an existing relay (returns None
+            when there is none)
 
     Returns:
         (PowerFactory relay to use, True if the original was renamed)
@@ -705,6 +734,9 @@ def _find_or_create_relay(
     if allow_rename and pf_device.loc_name == pf_device_name:
         pf_device.loc_name = asset_name
         return pf_device, True
+
+    if not allow_create:
+        return None, False
 
     logger.info(
         f"Enumeration: creating relay '{asset_name}' in cubicle of "

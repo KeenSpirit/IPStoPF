@@ -364,12 +364,15 @@ def select_main_file(file_name, location, called_function):
     set_file_name = os.path.join(location, f"{file_name}.csv")
     print(set_file_name)
 
-    # Check if file was recently modified
-    if called_function:
-        # For batch mode, skip if file was modified in last 24 hours
-        if is_file_recent(set_file_name, max_age_seconds=24 * 60 * 60):
-            print("Project had already been studied")
-            return None
+    # In batch mode this runs AFTER the transfer has written to the model,
+    # Always overwrite.
+    if called_function and is_file_recent(
+        set_file_name, max_age_seconds=24 * 60 * 60
+    ):
+        logger.info(
+            f"Overwriting results file written in the last 24 h: "
+            f"{set_file_name}"
+        )
 
     # Remove existing file if present
     safe_file_remove(set_file_name)

@@ -26,6 +26,7 @@ Usage:
 """
 
 import logging
+import math
 from typing import Dict, List, Tuple, Optional, Any, Union
 
 from update_powerfactory import mapping_file as mf
@@ -68,7 +69,13 @@ EARTH_FAULT_PATTERNS: Tuple[str, ...] = (
 # fallback) left the element in service as far as studies were concerned.
 PICKUP_ATTRIBUTES = frozenset({"Ipset", "Ipsetr"})
 
-_OFF_TOKENS = frozenset({"off", "disabled", "disable"})
+_OFF_TOKENS = frozenset({
+    "off", "disabled", "disable",
+    # An infinite pickup is IPS's way of writing "stage disabled" on
+    # electromechanical relays (Ergon_RI, MCGG22, RXIDF instantaneous
+    # elements). PowerFactory rejects inf, so it is treated as OFF.
+    "inf", "+inf", "infinity", "+infinity", "\u221e",
+})
 
 
 class SettingRejectedError(RuntimeError):
@@ -77,6 +84,8 @@ class SettingRejectedError(RuntimeError):
 
 def is_off_value(value: Any) -> bool:
     """True when an IPS setting value means 'element disabled'."""
+    if isinstance(value, float):
+        return math.isinf(value) and value > 0
     return isinstance(value, str) and value.strip().lower() in _OFF_TOKENS
 
 

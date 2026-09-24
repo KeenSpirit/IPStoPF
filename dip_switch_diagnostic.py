@@ -667,3 +667,9 @@ def run(
             app.PrintWarn(f"Could not write report: {exc}")
 
     return text
+
+
+if __name__ == '__main__':
+    # Logging is already configured via setup_logging() at module level
+    run(device_name="RC-878593", pattern="EQL_RC10_RC20")
+    #run(device_name="CLINSS-FB05-J01-J11", pattern="P142 090B 100B 150A 150C 170C 210G 300J")
