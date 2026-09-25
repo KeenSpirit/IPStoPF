@@ -349,6 +349,7 @@ def get_plant_number(device_name: str) -> Optional[str]:
     - Reclosers: RC-{Number} or RE-{Number}
     - Relays: {SUB}SS-{BAY}-{Device}
     - Fuses: DO-{Number}, FU-{Number}, or DL-{Number}
+    - Gas switches: GS-{Number} (434 have IPS setting files, e.g. ADVC PTCC)
 
     Args:
         device_name: The full device name from PowerFactory
@@ -364,6 +365,7 @@ def get_plant_number(device_name: str) -> Optional[str]:
         device_name[:3] == "DO-",   # Dropout fuse
         device_name[:3] == "FU-",   # Fuse
         device_name[:3] == "DL-",   # Distribution line fuse
+        device_name[:3] == "GS-",  # Gas switch (ADVC/NOJA controller)
     ]
 
     if not any(valid_patterns):
@@ -512,7 +514,10 @@ def _get_setting_id_indexed(
         return setting_ids, list_of_devices
 
     # Try partial match (device name contained in asset name)
-    partial_matches = setting_index.get_by_asset_contains(plant_number)
+    partial_matches = [
+        record for record in setting_index.get_by_asset_contains(plant_number)
+        if _continues_plant_number(record.assetname, plant_number)
+    ]
 
     if len(partial_matches) > _MAX_PARTIAL_MATCHES:
         logger.warning(
@@ -685,6 +690,22 @@ def _claim(pf_obj, record: SettingRecord) -> bool:
         return False
     _CLAIMED.add(key)
     return True
+
+
+def _continues_plant_number(asset_name: str, plant_number: str) -> bool:
+    """
+    True unless the asset name extends the plant number's final number.
+
+    A prefix match must not run on into more digits: eg'DO-79977'  doesn't match
+    'DO-799772' - different fuses
+    """
+    pos = asset_name.find(plant_number)
+    if pos < 0:
+        return True  # not a prefix/substring hit; leave to the caller
+    end = pos + len(plant_number)
+    if end >= len(asset_name):
+        return True
+    return not (asset_name[end].isdigit() and plant_number[-1].isdigit())
 
 
 def _pattern_has_mapping(pattern_name: Optional[str]) -> bool:

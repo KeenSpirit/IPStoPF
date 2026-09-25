@@ -118,36 +118,42 @@ def _process_dip_element(
         app.PrintError(f"Element - {element_name} could not be found")
         return
 
-    # Get and validate existing dip switch configuration
-    raw_dip_set = pf_element.GetAttribute("e:aDipset")
-    existing_dip_set, wrap_as_list = _normalise_dipset(raw_dip_set)
-
     device_name = pf_device.loc_name
-    if existing_dip_set is None:
+    # The number of switches comes from the element's TYPE
+    dip_names = _get_dip_names(pf_element)
+    if not dip_names:
         logger.warning(
-            " %s dip switch set for %s is unreadable (%r); left unchanged",
-            device_name, element_name, raw_dip_set
+            " %s: dip switch names for %s could not be read from the "
+            "element type; left unchanged",
+            device_name, element_name
         )
         return
 
-    if len(existing_dip_set) != len(element_mapping):
-        # Mismatch between mapping and actual element
+    unknown = [line[2] for line in element_mapping if line[2] not in dip_names]
+    if unknown:
         logger.warning(
-            " %s dip switch count mismatch for %s: mapping has %d entries, "
-            "element has %d switches",
-            device_name, element_name, len(element_mapping), len(existing_dip_set)
+            " %s: mapping rows for %s name switches the element type does "
+            "not have: %s",
+            device_name, element_name, unknown
         )
-        return
 
-    # Calculate and apply new dip switch settings
+    raw_dip_set = pf_element.GetAttribute("e:aDipset")
+    _, wrap_as_list = _normalise_dipset(raw_dip_set)
+
+    # Every switch starts OFF; _calculate_dip_settings sets the mapped ones.
     new_dip_set = _calculate_dip_settings(
-        pf_element, element_mapping, setting_dict, existing_dip_set
+        pf_element, element_mapping, setting_dict, "0" * len(dip_names)
     )
 
-    # Write back in the same shape PowerFactory handed us.
-    pf_element.SetAttribute(
-        "e:aDipset", [new_dip_set] if wrap_as_list else new_dip_set
-    )
+    try:
+        pf_element.SetAttribute(
+            "e:aDipset", [new_dip_set] if wrap_as_list else new_dip_set
+        )
+    except (AttributeError, TypeError) as exc:
+        logger.warning(
+            " %s: PowerFactory rejected dip switch set %r for %s: %s",
+            device_name, new_dip_set, element_name, exc
+        )
 
 
 def _normalise_dipset(raw: Any) -> Tuple[Optional[str], bool]:
@@ -155,12 +161,7 @@ def _normalise_dipset(raw: Any) -> Tuple[Optional[str], bool]:
     Coerce the value read from ``e:aDipset`` into a switch string.
 
     PowerFactory returns string-vector attributes as a list, so aDipset
-    comes back as ``['10110']`` rather than ``'10110'``. ``len()`` on
-    that list is 1, which is why every relay logged "element has 1
-    switches" (Gladstone/Beenleigh, 2026-09-23) and no dip switch was
-    ever written. ``_get_dip_names`` already unwraps ``sInput`` the same
-    way.
-
+    comes back as ``['10110']`` rather than ``'10110'``.
     Returns:
         (switch string or None if unreadable, True if the raw value was
         a one-element list and must be written back as one)
@@ -203,7 +204,9 @@ def _find_dip_element_and_mappings(
     pf_element = None
 
     for line in mapping_file:
-        if element_name not in line[1]:
+        # Exact match: a substring test let "Trip Logic_dip" also collect
+        # the rows of "EF Trip Logic_dip", "PH Trip Logic_dip", etc.
+        if line[1] != element_name:
             continue
 
         element_mapping.append(line)

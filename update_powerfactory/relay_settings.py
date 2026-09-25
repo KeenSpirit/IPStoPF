@@ -432,7 +432,8 @@ def create_setting_dictionary(
         Dictionary mapping attribute keys to setting values
     """
     setting_dictionary = {}
-    collisions = set()
+    collisions: Dict[str, List[str]] = {}
+    sources: Dict[str, str] = {}
 
     for setting in settings:
         lines = mapping_file
@@ -464,8 +465,12 @@ def create_setting_dictionary(
                         converted = value
                     if key in setting_dictionary \
                             and setting_dictionary[key] != converted:
-                        collisions.add(key)
+                        seen = collisions.setdefault(
+                            key, [f"{setting_dictionary[key]!r} <- {sources[key]}"]
+                        )
+                        seen.append(f"{converted!r} <- {setting[0]}{setting[1]}")
                     setting_dictionary[key] = converted
+                    sources[key] = f"{setting[0]}{setting[1]}"
                     continue
                 elif (
                     str(line[index]) != str(value)
@@ -484,11 +489,17 @@ def create_setting_dictionary(
     if collisions:
         # Two different IPS settings resolved to the same PF attribute
         # (e.g. one mapping row per setting group); the last one read wins.
+        # Values in the order read (first = value first stored, then each
+        # overriding value with the IPS block path + parameter it came from),
+        # so the mapping row at fault can be found without an IPS export.
         logger.warning(
             "%s: %d PF attribute(s) mapped from more than one IPS setting "
             "with different values; last value used: %s",
             getattr(pf_device, "loc_name", "?"), len(collisions),
-            sorted(collisions)[:10],
+            "; ".join(
+                f"{key}: {values}" for key, values in
+                sorted(collisions.items())[:10]
+            ),
         )
 
     return setting_dictionary

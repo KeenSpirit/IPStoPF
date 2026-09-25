@@ -29,6 +29,9 @@ from core import UpdateResult
 from config.relay_patterns import RELAYS_OOS
 from logging_config import get_logger, log_device_atts
 
+# add_relay_skeletons.GAS_SWITCH_STRING (not imported: avoids pulling the
+# ips_data import chain into update_powerfactory).
+GAS_SWITCH_STRING = "Gas Switch"
 logger = get_logger(__name__)
 
 
@@ -101,7 +104,16 @@ def update_pf(
                 #     makes ComShc raise and can derail the SPA stage)
                 #   - relay type assigned    -> set OUT OF SERVICE
                 # Fuses keep the legacy "Not in IPS" tag and are left in place.
-                if pf_obj.GetClassName() == "ElmRelay":
+                if pf_obj.GetClassName() == "ElmRelay" and _is_gas_switch(pf_obj):
+                    # Gas switches are kept in the model even without IPS
+                    # settings (most have none); a placeholder with no type
+                    # is kept out of service so it cannot reach ComShc.
+                    if pf_obj.typ_id is None:
+                        pf_obj.SetAttribute("outserv", 1)
+                    result = UpdateResult.info_record(
+                        pf_obj, "Gas switch - not in IPS, kept"
+                    )
+                elif pf_obj.GetClassName() == "ElmRelay":
                     if pf_obj.typ_id is None:
                         # Capture the result BEFORE Delete(); info_record reads
                         # loc_name/cpGrid off the object, invalid once deleted.
@@ -176,6 +188,16 @@ def update_pf(
     final_results.extend([r.to_dict() for r in results])
 
     return final_results, updates
+
+
+def _is_gas_switch(pf_obj: Any) -> bool:
+    """Gas switch relay: skeleton-tagged or named with the GS- plant prefix."""
+    if str(pf_obj.loc_name).startswith("GS-"):
+        return True
+    try:
+        return pf_obj.GetAttribute("chr_name") == GAS_SWITCH_STRING
+    except AttributeError:
+        return False
 
 
 def _process_device(
