@@ -78,6 +78,12 @@ _OFF_TOKENS = frozenset({
 })
 
 
+# add_relay_skeletons.DATA_SOURCE_STRING (not imported: avoids pulling the
+# ips_data import chain into update_powerfactory). Relays created by the
+# skeleton pass carry this in dat_src and are created out of service.
+SKELETON_DATA_SOURCE = "PRS"
+
+
 class SettingRejectedError(RuntimeError):
     """PowerFactory refused a converted setting value (usually out of range)."""
 
@@ -216,8 +222,38 @@ def relay_settings(
     result = cs.update_ct(app, device_object, result, ct_library)
     result = vs.update_vt(app, device_object, result, vt_library)
 
+    _enable_configured_skeleton(device_object, result)
+
     return result, updates
 
+
+def _enable_configured_skeleton(device_object: Any, result: Any) -> None:
+    """
+    Put a skeleton-created relay into service once it has been configured.
+
+    Only relays the script itself took out of service (skeleton-tagged)
+    are switched on, and only on a clean result: a relay with no type,
+    or with any recorded problem, is left as it is. Relays that are out
+    of service in the master model for other reasons are untouched.
+    """
+    pf_device = device_object.pf_obj
+    try:
+        if pf_device.GetAttribute("outserv") != 1:
+            return
+        if pf_device.GetAttribute("dat_src") != SKELETON_DATA_SOURCE:
+            return
+        if pf_device.typ_id is None:
+            return
+    except AttributeError:
+        return
+    if result.result:
+        return
+
+    pf_device.SetAttribute("outserv", 0)
+    logger.info(
+        f"{device_object.name}: skeleton relay configured from IPS; "
+        f"placed in service"
+    )
 
 # =============================================================================
 # Device Classification
