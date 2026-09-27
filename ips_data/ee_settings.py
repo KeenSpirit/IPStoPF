@@ -169,7 +169,10 @@ def ee_device_list(
                 continue
             elif fuse_result == "failed":
                 data_capture_list.append(
-                    UpdateResult.info_record(pf_device, "FAILED FUSE")
+                    UpdateResult.info_record(
+                        pf_device,
+                        "FAILED FUSE - fuse cubicle not connected to an element",
+                    )
                 )
                 continue
             fuse_type, fuse_size = fuse_result
@@ -280,7 +283,10 @@ def ergon_all_dev_list(
                 continue
             elif fuse_result == "failed":
                 data_capture_list.append(
-                    UpdateResult.info_record(pf_device, "FAILED FUSE")
+                    UpdateResult.info_record(
+                        pf_device,
+                        "FAILED FUSE - fuse cubicle not connected to an element",
+                    )
                 )
                 continue
             fuse_type, fuse_size = fuse_result

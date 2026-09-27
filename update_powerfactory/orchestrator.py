@@ -200,6 +200,34 @@ def _is_gas_switch(pf_obj: Any) -> bool:
         return False
 
 
+# IPS patterns that describe a fuse. A fuse is set by choosing its
+# TypFuse (fuse_settings), never through a relay mapping file.
+FUSE_PATTERNS = ("Ergon_Fuse",)
+
+
+def _fuse_pattern_on_relay(device_object: Any) -> UpdateResult:
+    """
+    Handle an ElmRelay whose IPS setting is a fuse pattern.
+
+    The device is a fuse in IPS but an ElmRelay in the model, so it can
+    never be typed or set through a relay mapping file. Report it as a
+    modelling issue and keep it out of service, rather than sending it
+    down the relay path to fail as "Mapping file not found".
+    """
+    pf_obj = device_object.pf_obj
+    result = UpdateResult.from_device(device_object)
+    result.relay_pattern = device_object.device
+    result.used_pattern = device_object.device
+    result.result = "Fuse in IPS but ElmRelay in model - set out of service"
+    pf_obj.SetAttribute("outserv", 1)
+    logger.warning(
+        f"{pf_obj.loc_name}: IPS pattern '{device_object.device}' is a fuse "
+        f"but the model object is an ElmRelay; set out of service. Replace "
+        f"it with a RelFuse in the model."
+    )
+    return result
+
+
 def _process_device(
         app,
         device_object: Any,
@@ -226,6 +254,8 @@ def _process_device(
         Tuple of (UpdateResult, updated updates flag)
     """
     if device_object.pf_obj.GetClassName() == "ElmRelay":
+        if device_object.device in FUSE_PATTERNS:
+            return _fuse_pattern_on_relay(device_object), updates
         return rs.relay_settings(
             app, device_object, relay_index, updates,
             ct_library, vt_library,

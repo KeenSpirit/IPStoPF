@@ -15,6 +15,9 @@ from typing import Dict, List, Optional, Any, Union, Tuple
 
 from update_powerfactory.type_index import FuseTypeIndex
 from core import UpdateResult
+from logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 
@@ -67,6 +70,12 @@ def fuse_setting(
         result.relay_pattern = device_object.device
         result.used_pattern = device_object.device
         result.result = "Type Matching Error"
+        logger.warning(
+            f"{device_object.pf_obj.loc_name}: no TypFuse in ErgonLibrary for "
+            f"{device_object.fuse_type or 'fuse'} - IPS curve "
+            f"'{curve_type}', rating '{rating.strip()}', "
+            f"fuse size '{device_object.fuse_size}'"
+        )
         return result
 
     # Apply fuse type and settings
