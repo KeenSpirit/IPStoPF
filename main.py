@@ -94,12 +94,13 @@ for the batch/called_function rules and coding standards.
 """
 import powerfactory as pf
 import os
+from collections import Counter
 from tkinter import *  # noqa [F403]
 
 from ips_data import ips_settings as ips
 from update_powerfactory import orchestrator as up
 
-from config.paths import OUTPUT_BATCH_DIR, OUTPUT_LOCAL_DIR
+from config.paths import OUTPUT_LOCAL_DIR, PROTECTION_BATCH_OUTPUT_DIR
 from config.validation import (
     require_valid_config,
     validate_for_batch_mode,
@@ -256,7 +257,7 @@ def main(app=None, batch=True):
         data_capture_list, has_updates = up.update_pf(app, device_list, data_capture_list)
 
         logger.info(f"Data capture list entries: {len(data_capture_list)}")
-        logger.info(f"Data capture list: {config_log_result(data_capture_list)}")
+        logger.info(f"Result summary: {summarise_results(data_capture_list)}")
         logger.info(f"Updates applied: {has_updates}")
 
         # Create file to save script information
@@ -340,7 +341,7 @@ def create_save_file(app, prjt, called_function):
         "/", "_"
     )
     if called_function:
-        file_location = OUTPUT_BATCH_DIR
+        file_location = PROTECTION_BATCH_OUTPUT_DIR
         main_file_name = select_main_file(
             file_name, file_location, called_function
         )
@@ -406,28 +407,21 @@ def print_results(app, data_capture_list):
     app.PrintInfo(print_string)
 
 
-def config_log_result(data_capture_list):
+def summarise_results(data_capture_list) -> dict:
     """
-    Only log results of interest
-    :param data_capture_list:
-    :return:
+    Count the data capture entries by RESULT, most common first.
+
+    The per-device detail is in the results CSV; the log only needs the
+    totals, so a run can be judged at a glance.
     """
-
-    log_results = []
-
+    counts = Counter()
     for info in data_capture_list:
-        log_result = {'SUBSTATION': info['SUBSTATION']}
         try:
-            device_name = info["PLANT_NUMBER"]
-        except KeyError:
-            device_name = info["CB_NAME"]
-        log_result["DEVICE NAME"] = device_name
-        try:
-            log_result["RESULT"] = info["RESULT"]
-        except KeyError:
-            pass
-        log_results.append(log_result)
-    return log_results
+            result = info["RESULT"]
+        except (KeyError, TypeError):
+            result = None
+        counts[result or "(no result recorded)"] += 1
+    return dict(counts.most_common())
 
 
 if __name__ == '__main__':

@@ -45,7 +45,7 @@ SUBTRANSMISSION:
 
 import sys
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 from config.paths import ASSET_CLASSES_PATH
 
@@ -66,6 +66,12 @@ GAS_SWITCH_STRING = "Gas Switch"
 NETWORK_DISTRIBUTION = "distribution"
 NETWORK_SUBTRANSMISSION = "subtransmission"
 _VALID_NETWORK_LEVELS = (NETWORK_DISTRIBUTION, NETWORK_SUBTRANSMISSION)
+
+# Outcome of each setup_relay call in the current skeleton pass: "created"
+# (new skeleton added), "existing" (already in the right place) or
+# "failed" (missing data or no cubicle). Reset at the start of
+# add_relay_skeletons and reported at the end.
+_SKELETON_STATS = Counter()
 
 
 def add_relay_skeletons(app, network_level, selected_grid=None, project=None):
@@ -161,6 +167,7 @@ def add_relay_skeletons(app, network_level, selected_grid=None, project=None):
 
     num_elements = len(elements)
 
+    _SKELETON_STATS.clear()
     all_new = []
     for i, elm in enumerate(elements):
         if i % 100 == 0:
@@ -176,9 +183,14 @@ def add_relay_skeletons(app, network_level, selected_grid=None, project=None):
             feeder_cbs,
             network_level,
         )
-        all_new.extend(new_devices)
+        all_new.extend(d for d in new_devices if d is not None)
 
-    logger.info(f"Relay skeleton pass complete: {len(all_new)} new devices")
+    logger.info(
+        f"Relay skeleton pass complete: {_SKELETON_STATS['created']} new "
+        f"device(s) added, {_SKELETON_STATS['existing']} already present, "
+        f"{_SKELETON_STATS['failed']} could not be created "
+        f"({num_elements} elements checked)"
+    )
     return all_new
 
 
@@ -479,6 +491,7 @@ def setup_relay(
             f"Do not have all of the required values: Planto_no: {plant_no} "
             f"asset_id: {asset_id}, ellipse: {ellipse_id}, relay_class: {relay_class}"
         )
+        _SKELETON_STATS["failed"] += 1
         return
     try:
         plant_no = plant_no.strip()
@@ -520,6 +533,7 @@ def setup_relay(
                 relay_exists = True
                 found_relay = relay
         if relay_exists:
+            _SKELETON_STATS["existing"] += 1
             return found_relay
     else:
         # Check for a relay associated somewhere else
@@ -542,6 +556,7 @@ def setup_relay(
                 logger.debug(f"Deleted {existing_relay}")
     if root_cub is None:
         logger.error(f"Unable to create a relay for {elm} as it has no cub0")
+        _SKELETON_STATS["failed"] += 1
         return None
     # Build the new relay skeleton
     new_relay = root_cub.CreateObject(relay_class, plant_no)
@@ -576,6 +591,7 @@ def setup_relay(
         new_relay.SetAttribute("chr_name", GAS_SWITCH_STRING)
     new_relay.SetAttribute("outserv", 1)
 
+    _SKELETON_STATS["created"] += 1
     logger.info(f"Added {new_relay} for {elm} based on {asset_id}")
     return new_relay
 

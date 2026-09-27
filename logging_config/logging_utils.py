@@ -102,6 +102,24 @@ def get_log_path(subdir: str = "results_log") -> Path:
     return log_path
 
 
+def _run_log_dir() -> Path:
+    """
+    Folder for this run's JSON log: the ProtectionBatchRunner output
+    folder, beside the transfer results CSV and the fault study workbooks.
+
+    Falls back to the repository's results_log folder if that folder
+    cannot be created, so an unavailable C: drive never stops a run.
+    """
+    try:
+        from config.paths import get_protection_batch_output_dir
+        return get_protection_batch_output_dir()
+    except (OSError, ImportError) as err:
+        fallback = get_log_path()
+        # Logging is not configured yet, so report on the console.
+        print(f"Run log folder unavailable ({err}); logging to {fallback}")
+        return fallback
+
+
 def setup_logging(log_level: int = logging.INFO) -> None:
     """
     Initialize the logging system.
@@ -130,7 +148,7 @@ def setup_logging(log_level: int = logging.INFO) -> None:
     # fragment lines observed, 2026-07-16) - the queue serialises threads
     # within this process, not other processes.
     global _log_file
-    log_dir = get_log_path()
+    log_dir = _run_log_dir()
     run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     _log_file = log_dir / f"ips_to_pf_{run_stamp}_{os.getpid()}.log"
 

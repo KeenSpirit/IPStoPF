@@ -69,6 +69,11 @@ EARTH_FAULT_PATTERNS: Tuple[str, ...] = (
 # fallback) left the element in service as far as studies were concerned.
 PICKUP_ATTRIBUTES = frozenset({"Ipset", "Ipsetr"})
 
+# Limit attributes where an IPS value of OFF means "no limit", not "element
+# disabled". The value is what is written to PowerFactory for no limit
+# (9999 is what the conversion fallback has always written for these).
+OFF_MEANS_NO_LIMIT: Dict[str, float] = {"udeftmax": 180}
+
 _OFF_TOKENS = frozenset({
     "off", "disabled", "disable",
     # An infinite pickup is IPS's way of writing "stage disabled" on
@@ -655,13 +660,24 @@ def _apply_pickup_enable_state(
     """
     device_name = pf_device.loc_name
 
+    newly_disabled = []
     for element_key, element in disabled_elements.items():
         if element.GetAttribute("outserv") != 1:
             element.SetAttribute("outserv", 1)
             updates = True
+            newly_disabled.append("/".join(k for k in element_key if k))
+    # One line per relay rather than one per element: multi-trip relays map
+    # the same element in every trip folder, which repeated the same line
+    # four times per recloser.
+    if newly_disabled:
         logger.info(
-            "%s: %s pickup is OFF in IPS; element set out of service",
-            device_name, element.loc_name,
+            "%s: pickup OFF in IPS; set out of service: %s",
+            device_name, ", ".join(newly_disabled),
+        )
+    if len(disabled_elements) > len(newly_disabled):
+        logger.debug(
+            "%s: %d element(s) with pickup OFF in IPS already out of service",
+            device_name, len(disabled_elements) - len(newly_disabled),
         )
 
     for element_key, element in enabled_elements.items():
@@ -784,6 +800,15 @@ def set_attribute(
             # The IPS value arrived as a string (or the wrong numeric type)
             # for a numeric attribute: convert and retry below.
             pass
+
+        if line[2] in OFF_MEANS_NO_LIMIT and is_off_value(setting_value):
+            # OFF on a limit attribute is a known value meaning "no limit":
+            # write the no-limit value without logging a conversion failure.
+            no_limit = OFF_MEANS_NO_LIMIT[line[2]]
+            if existing_setting != no_limit:
+                _set_or_reject(element, attribute, no_limit, device_object)
+                return True
+            return updates
 
         try:
             numeric = float(setting_value)

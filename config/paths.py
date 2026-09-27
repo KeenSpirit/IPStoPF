@@ -82,6 +82,33 @@ OUTPUT_BATCH_DIR = os.path.join(
 # Local fallback for output when network is unavailable (Citrix environment)
 OUTPUT_LOCAL_DIR = r"C:\LocalData\PowerFactory Output Folders\IPS Data Transfer"
 
+# Single output folder for ProtectionBatchRunner runs: the JSON run log,
+# the transfer results CSV and the fault study workbooks all land here.
+PROTECTION_BATCH_OUTPUT_DIR = (
+    r"C:\LocalData\PowerFactory Output Folders\ProtectionBatchRunner"
+)
+
+
+def get_protection_batch_output_dir() -> Path:
+    r"""
+    The ProtectionBatchRunner output folder, created if it does not exist.
+
+    Under Citrix the C: drive of the user's own machine is reached as
+    \\Client\C$, so the path is redirected there when that share is
+    visible (the same rule as utils.file_utils.get_citrix_adjusted_path).
+
+    Raises:
+        OSError: If the folder cannot be created.
+    """
+    path = PROTECTION_BATCH_OUTPUT_DIR
+    try:
+        if os.path.isdir(r"\\Client\C$\localdata"):
+            path = "\\\\Client\\" + path.replace("C:", "C$", 1)
+    except OSError:
+        pass
+    os.makedirs(path, exist_ok=True)
+    return Path(path)
+
 
 # =============================================================================
 # Helper Functions
