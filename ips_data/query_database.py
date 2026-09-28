@@ -306,6 +306,12 @@ _BATCH_COLS = [
     "proposedsetting",
     "unitenu",
     "relaysettingid",
+    "relayparamsetid",
+    "relparmodelid",
+    "setname",
+    "readername",
+    "dateimportrelay",
+    "modelsort",
 ]
 
 _ORACLE_IN_LIMIT = 1000
@@ -317,7 +323,10 @@ SELECT
         WHEN relparmodel.datatype = 'Enum'
         THEN CAST(relparenumitem.textenu AS NVARCHAR2(2000))
         ELSE CAST(relayparam.actual AS NVARCHAR2(2000))
-    END AS proposedsetting, relparmodel.unitenu, relaysetting.relaysettingid
+    END AS proposedsetting, relparmodel.unitenu, relaysetting.relaysettingid,
+    relayparamset.relayparamsetid, relparmodel.relparmodelid,
+    relayparamset.setname, relayparamset.readername,
+    relayparamset.dateimportrelay, relparmodel.modelsort
 FROM
     edw_ldg_owner.ips_relparblock relparblock_2
     INNER JOIN edw_ldg_owner.ips_relparblock relparblock_1 ON
@@ -341,7 +350,8 @@ FROM
     ) ON relparblock_1.relparblockid = relparblock.parentrowid
 WHERE relaysetting.relaysettingid IN ({in_clause})
     AND relayparam.actual IS NOT NULL
-ORDER BY relaysetting.assetid
+ORDER BY relaysetting.assetid, relaysetting.relaysettingid,
+    relayparamset.relayparamsetid, relparmodel.relparmodelid
 """
 
 ERGON_BATCH_SQL = """
@@ -352,7 +362,13 @@ SELECT  relparblock.blockpathenu,
             ELSE RelayParam.Actual
         END AS ProposedSetting,
         RelParModel.UnitENU,
-        RelaySetting.RelaySettingID
+        RelaySetting.RelaySettingID,
+        RelayParamSet.RelayParamSetID,
+        RelParModel.RelParModelID,
+        RelayParamSet.SetName,
+        RelayParamSet.ReaderName,
+        RelayParamSet.DateImportRelay,
+        RelParModel.ModelSort
 FROM    EDW_LDG_OWNER.IPS_RelParBlock RelParBlock_2
         INNER JOIN EDW_LDG_OWNER.IPS_RelParBlock RelParBlock_1 ON
             RelParBlock_2.RelParBlockID = RelParBlock_1.ParentRowID
@@ -374,7 +390,8 @@ FROM    EDW_LDG_OWNER.IPS_RelParBlock RelParBlock_2
                 RelParModel.RelParEnumID = RelParEnum.RelParEnumID
         ) ON RelParBlock_1.RelParBlockID = RelParBlock.ParentRowID
 WHERE RelaySetting.RelaySettingID IN ({in_clause})
-ORDER BY RelaySetting.AssetID
+ORDER BY RelaySetting.AssetID, RelaySetting.RelaySettingID,
+    RelayParamSet.RelayParamSetID, RelParModel.RelParModelID
 """
 
 
