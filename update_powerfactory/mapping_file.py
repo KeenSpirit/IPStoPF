@@ -392,7 +392,10 @@ def get_type_mapping(
     Returns:
         Tuple of (mapping_filename, relay_type) or None if not found
     """
-    variants = _load_type_mapping().get(pattern_name)
+    # type_mapping.csv keys are stripped on load; strip the lookup too, so
+    # an IPS pattern with a trailing space (e.g. 'ADVC2 WSOS5 V5.13.26 ')
+    # still finds its row.
+    variants = _load_type_mapping().get((pattern_name or "").strip())
     if not variants:
         return None
     return _select_type_variant(variants, ct_secondary)
