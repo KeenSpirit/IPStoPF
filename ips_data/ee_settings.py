@@ -681,10 +681,8 @@ def _create_device_from_record(
         None,
     )
 
-    # Load settings if not a batch call
-    if not called_function:
-        ips_settings = qd.reg_get_ips_settings(app, record.relaysettingid)
-        prot_dev.associated_settings(ips_settings)
+    # Settings are bulk-loaded from the ODS by get_ips_settings after
+    # enumeration (the per-device NetDash fetch is decommissioned).
 
     prot_dev.fuse_type = fuse_type
     prot_dev.fuse_size = fuse_size

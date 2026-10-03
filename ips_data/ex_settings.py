@@ -561,11 +561,11 @@ def _create_device_from_record(
     )
     prot_dev.switch = switch
     prot_dev.seq_name = record.assetname
-    
-    # Load settings if not batch
-    if not called_function:
-        ips_settings = qd.seq_get_ips_settings(app, record.relaysettingid)
-        prot_dev.associated_settings(ips_settings)
+
+    # Settings are no longer fetched here one device at a time: that path
+    # went through NetDash, which is decommissioned. get_ips_settings bulk-
+    # loads every device's settings from the ODS after enumeration, in
+    # interactive and batch runs alike.
     
     # Mark fuses
     if prot_dev.device and "fuse" in prot_dev.device.lower():

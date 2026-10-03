@@ -71,16 +71,18 @@ def get_ips_settings(
         f"{len(set_ids)} setting IDs"
     )
 
-    # Load detailed settings for all devices
+    # Load detailed settings for all devices. Always the bulk ODS fetch:
+    # interactive selections used to load per device through NetDash,
+    # which is decommissioned, so that mode could only time out.
     ips_settings, ips_it_settings = qd.batch_settings(
-        app, region, batch, set_ids
+        app, region, True, set_ids
     )
     logger.info("Settings fetch complete; associating settings with devices")
 
     # Associate settings with each device
     _associate_device_settings(
         app, device_list, ips_settings, ips_it_settings,
-        region, batch
+        region, True
     )
     logger.info("Settings association complete; handing off to update_pf")
 
