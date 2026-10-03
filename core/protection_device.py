@@ -10,6 +10,7 @@ the IPS data retrieval layer and the PowerFactory update layer.
 
 from typing import Any, Dict, List, Optional
 
+from core import instrument_selection as isel
 from logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -103,6 +104,10 @@ class ProtectionDevice:
         self.fuse_type = None
         self.fuse_size = None
         self.settings: List[List[str]] = []
+        # CT ratio programmed in the relay's own settings (0120/0121 etc.),
+        # used to pick the right IPS transformer when several are linked.
+        self._setting_ct_primary: Optional[int] = None
+        self._setting_ct_secondary: Optional[int] = None
 
     def associated_settings(self, all_settings: Dict[str, List[Dict]]) -> None:
         """
@@ -135,8 +140,10 @@ class ProtectionDevice:
                 param_name = str(row.get("paramnameenu", ""))
                 if param_name in ["0120", "Iprim", "0A07"]:
                     self.ct_primary = int(float(row["proposedsetting"]))
+                    self._setting_ct_primary = self.ct_primary
                 elif param_name in ["0121", "In", "0A08"]:
                     self.ct_secondary = int(float(row["proposedsetting"]))
+                    self._setting_ct_secondary = self.ct_secondary
             except (ValueError, KeyError, TypeError):
                 pass
 
@@ -225,24 +232,21 @@ class ProtectionDevice:
         Args:
             all_settings: List of setting records with instrument attributes
         """
+        rows = []
         for row in all_settings:
-            if row.relaysettingid == self.setting_id:
-                self.ct_settingid = row.relaysettingid
-                if not row.actualvalue:
-                    continue
-                try:
-                    if "Iprim" in row.nameenu:
-                        value = int(float(row.actualvalue))
-                        if value > self.ct_primary:
-                            self.ct_primary = value
-                    elif "Isec" in row.nameenu:
-                        self.ct_secondary = int(float(row.actualvalue))
-                    elif "Vprim" in row.nameenu:
-                        self.vt_primary = int(float(row.actualvalue))
-                    elif "Vsec" in row.nameenu:
-                        self.vt_secondary = int(float(row.actualvalue))
-                except (ValueError, TypeError, AttributeError):
-                    pass
+            if getattr(row, "relaysettingid", None) != self.setting_id:
+                continue
+            self.ct_settingid = row.relaysettingid
+            rows.append((getattr(row, "nameenu", ""),
+                         getattr(row, "actualvalue", None)))
+        if not rows:
+            return
+
+        groups = isel.group_energex_rows(rows)
+        ct = isel.choose_indexed(groups["ct"], self._setting_ct_primary)
+        self._apply_ct_choice(ct, relay_setting_wins_if_larger=True)
+        vt = isel.choose_indexed(groups["vt"])
+        self._apply_vt_choice(vt)
 
     def reg_instrument_attributes(self, all_settings: List[Any]) -> None:
         """
@@ -253,22 +257,78 @@ class ProtectionDevice:
         Args:
             all_settings: List of setting records with instrument attributes
         """
+        found = {"CT Primary": [], "CT Secondary": [],
+                 "VT Primary": [], "VT Secondary": []}
         for row in all_settings:
-            if row.relaysettingid == self.setting_id:
-                self.ct_settingid = row.relaysettingid
-                if not row.setting:
-                    continue
-                try:
-                    if "CT Primary" in row.paramnameenu:
-                        self.ct_primary = int(float(row.setting))
-                    elif "CT Secondary" in row.paramnameenu:
-                        self.ct_secondary = int(float(row.setting))
-                    elif "VT Primary" in row.paramnameenu:
-                        self.vt_primary = int(float(row.setting))
-                    elif "VT Secondary" in row.paramnameenu:
-                        self.vt_secondary = int(float(row.setting))
-                except (ValueError, TypeError, AttributeError):
-                    pass
+            if getattr(row, "relaysettingid", None) != self.setting_id:
+                continue
+            self.ct_settingid = row.relaysettingid
+            param = str(getattr(row, "paramnameenu", "") or "")
+            for key, values in found.items():
+                if key in param:
+                    values.append(getattr(row, "setting", None))
+                    break
+
+        ct = isel.choose_unindexed(
+            found["CT Primary"], found["CT Secondary"], self._setting_ct_primary
+        )
+        self._apply_ct_choice(ct, relay_setting_wins_if_larger=False)
+        vt = isel.choose_unindexed(found["VT Primary"], found["VT Secondary"])
+        self._apply_vt_choice(vt)
+
+    # ------------------------------------------------------------------
+    # Instrument transformer selection (see core.instrument_selection)
+    # ------------------------------------------------------------------
+
+    def _apply_ct_choice(
+        self, choice: "isel.TxChoice", relay_setting_wins_if_larger: bool
+    ) -> None:
+        """
+        Store the chosen CT, keeping primary and secondary from ONE transformer.
+
+        Energex precedence is unchanged: a CT primary programmed in the relay
+        settings that is larger than every IPS transformer is kept (the old
+        'IT value only if larger' rule); otherwise the IPS pair is used.
+        Values stay integers as before. A fractional secondary (2.89 A /
+        0.577 A interposing CTs) is now ROUNDED to the nearest amp, floored
+        at 1 (int() truncated 2.89 to 2 and 0.577 to 0), and logged; see
+        isel.secondary_as_int.
+        """
+        for note in choice.notes:
+            logger.warning(f"{self.name}: CT selection: {note}")
+        if not choice.found:
+            if choice.secondary is not None and self._setting_ct_secondary is None:
+                self.ct_secondary = isel.secondary_as_int(choice.secondary)
+            return
+
+        if (relay_setting_wins_if_larger
+                and self._setting_ct_primary is not None
+                and self._setting_ct_primary > choice.primary):
+            logger.info(
+                f"{self.name}: relay settings carry CT primary "
+                f"{self._setting_ct_primary}, larger than every IPS CT "
+                f"{choice.candidates}; relay setting kept"
+            )
+            return
+
+        self.ct_primary = _as_int(choice.primary, self.ct_primary)
+        if choice.secondary is not None:
+            whole = isel.secondary_as_int(choice.secondary)
+            if choice.secondary != whole:
+                logger.warning(
+                    f"{self.name}: CT secondary {choice.secondary:g} A is not "
+                    f"a whole number; {whole} A used (PowerFactory CT data is "
+                    f"written as whole amps)"
+                )
+            self.ct_secondary = whole
+
+    def _apply_vt_choice(self, choice: "isel.TxChoice") -> None:
+        for note in choice.notes:
+            logger.warning(f"{self.name}: VT selection: {note}")
+        if choice.primary is not None:
+            self.vt_primary = _as_int(choice.primary, self.vt_primary)
+        if choice.secondary is not None:
+            self.vt_secondary = _as_int(choice.secondary, self.vt_secondary)
 
     @property
     def ct_ratio(self) -> float:
@@ -294,6 +354,14 @@ class ProtectionDevice:
     def __str__(self) -> str:
         """String representation."""
         return f"{self.name} ({self.device})"
+
+
+def _as_int(value: Any, default: int) -> int:
+    """int(float(value)) as the old code did; default when not numeric."""
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
 
 
 def _sort_value(row: Dict) -> float:
