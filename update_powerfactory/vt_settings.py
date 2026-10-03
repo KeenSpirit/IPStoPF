@@ -61,9 +61,17 @@ def update_vt(
     """
     # If the VT secondary is equal to 1 then it has been determined that no
     # VT is required.
+    if device_object.pf_obj.typ_id is None:
+        result.vt_result = "No relay type"
+        return result
+
     if device_object.vt_secondary == 1:
         slot_objs = device_object.pf_obj.GetAttribute("pdiselm")
         for i, item in enumerate(device_object.pf_obj.GetAttribute("r:typ_id:e:pblk")):
+            # pblk holds None for unused positions; item.GetAttribute on one
+            # raised and turned the relay into "Script Failed" (OOS).
+            if item is None:
+                continue
             if item.GetAttribute("filtmod") == "StaVt*" or item.GetAttribute("filtmod") == "StaVt*,StaCombi":
                 slot_objs[i] = None
                 break
@@ -80,6 +88,11 @@ def update_vt(
     primary = int(float(device_object.vt_primary))
     secondary = int(float(device_object.vt_secondary))
     volt_trans = update_vt_slots(app, device_object)
+    if volt_trans is None:
+        # Relay type has no VT slot. The attribute calls below on None
+        # raised AttributeError -> "Script Failed" -> relay out of service.
+        result.vt_result = "No VT slot on relay type"
+        return result
     required_vt_type = select_vt_type(app, vt_library, primary, secondary)
 
     try:
@@ -91,8 +104,9 @@ def update_vt(
     volt_trans.SetAttribute("e:ptapset", primary)
     volt_trans.SetAttribute("e:stapset", secondary)
 
-    if device_object.vt_op_id:
-        volt_trans.SetAttribute("e:sernum", device_object.vt_datesetting)
+    vt_date = getattr(device_object, "vt_datesetting", None)
+    if device_object.vt_op_id and vt_date:
+        volt_trans.SetAttribute("e:sernum", vt_date)
 
     result.set_vt_info(device_object.vt_op_id, "VT info updated")
 
@@ -160,7 +174,7 @@ def update_vt_slots(app, device_object: Any) -> Any:
                     if (
                             obj.ptapset == device_object.vt_primary
                             and obj.stapset == device_object.vt_secondary
-                            and not device_object.ct_op_id
+                            and not device_object.vt_op_id
                     ):
                         # This deals with objects that have the correct tappings
                         new_name = str()

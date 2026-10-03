@@ -146,8 +146,9 @@ def update_ct(
     current_trans.SetAttribute("e:ptapset", primary)
     current_trans.SetAttribute("e:stapset", secondary)
 
-    if device_object.ct_op_id:
-        current_trans.SetAttribute("e:sernum", device_object.ct_datesetting)
+    ct_date = getattr(device_object, "ct_datesetting", None)
+    if device_object.ct_op_id and ct_date:
+        current_trans.SetAttribute("e:sernum", ct_date)
 
     result.set_ct_info(device_object.ct_op_id, "CT info updated")
 
