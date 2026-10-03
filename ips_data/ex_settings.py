@@ -21,7 +21,7 @@ from logging_config import get_logger
 
 logger = get_logger(__name__)
 
-from utils.pf_utils import get_all_protection_devices
+from utils.pf_utils import get_all_protection_devices, get_live_relays
 
 
 def ex_device_list(
@@ -610,12 +610,14 @@ def reconcile_orphan_relays(
     get_all_protection_devices() already restricts to energised, in-service,
     calculation-relevant devices, so anything returned here can reach ComShc.
     """
-    matched = [d.pf_obj for d in list_of_devices if d.pf_obj]
-    live_devices, _ = get_all_protection_devices(app)
+    # A set: membership was a list scan of PF objects per live relay.
+    matched = {d.pf_obj for d in list_of_devices if d.pf_obj}
+    # Relays only. get_all_protection_devices also scanned every fuse and
+    # classified every device by feeder (feeder.GetAll() per feeder), all
+    # discarded here.
+    live_devices = get_live_relays(app)
 
     for pf_device in live_devices:
-        if pf_device.GetClassName() != "ElmRelay":
-            continue
         if pf_device in matched:
             continue
 

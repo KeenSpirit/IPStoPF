@@ -89,15 +89,7 @@ def get_all_protection_devices(app: Any) -> Tuple[List[Any], Dict[str, List]]:
     net_mod = app.GetProjectFolder("netmod")
 
     # Get all relays
-    all_relays = net_mod.GetContents("*.ElmRelay", True)
-    relays = [
-        relay for relay in all_relays
-        if relay.HasAttribute("e:cpGrid")
-        if relay.GetParent().GetClassName() == "StaCubic"
-        if relay.fold_id.cterm.IsEnergized()
-        if not relay.IsOutOfService()
-        if relay.IsCalcRelevant()
-    ]
+    relays = get_live_relays(app)
 
     # Get all fuses
     all_fuses = net_mod.GetContents("*.RelFuse", True)
@@ -153,6 +145,26 @@ def get_all_protection_devices(app: Any) -> Tuple[List[Any], Dict[str, List]]:
         ]
 
     return devices, device_dict
+
+
+def get_live_relays(app: Any) -> List[Any]:
+    """
+    Energised, in-service, calculation-relevant ElmRelays in a cubicle.
+
+    The relay half of get_all_protection_devices without the fuse scan and
+    the per-device feeder classification (feeder.GetAll() for every active
+    feeder), which callers that only need the relays - the Energex orphan
+    sweep - were paying for: 4.3-5.4 min per Energex project on 2026-10-03.
+    """
+    net_mod = app.GetProjectFolder("netmod")
+    return [
+        relay for relay in net_mod.GetContents("*.ElmRelay", True)
+        if relay.HasAttribute("e:cpGrid")
+        if relay.GetParent().GetClassName() == "StaCubic"
+        if relay.fold_id.cterm.IsEnergized()
+        if not relay.IsOutOfService()
+        if relay.IsCalcRelevant()
+    ]
 
 
 def _is_line_fuse(fuse: Any) -> bool:
