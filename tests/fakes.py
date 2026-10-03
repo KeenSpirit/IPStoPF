@@ -32,7 +32,7 @@ class FakePF:
     def SetAttribute(self, name: str, value: Any) -> None:
         key = name[2:] if name.startswith("e:") else name
         current = self.attrs.get(key)
-        if isinstance(current, int) and not isinstance(current, bool) \
+        if isinstance(current, (int, float)) and not isinstance(current, bool) \
                 and isinstance(value, str):
             raise TypeError(f"{name} expects a number")
         self.attrs[key] = value

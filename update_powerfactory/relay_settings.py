@@ -100,6 +100,24 @@ def is_off_value(value: Any) -> bool:
     return isinstance(value, str) and value.strip().lower() in _OFF_TOKENS
 
 
+_FLAG_ON = frozenset({"on", "enabled", "enable", "yes", "true"})
+_FLAG_OFF = frozenset({"off", "disabled", "disable", "no", "false"})
+
+
+def _flag_value(value: Any, existing: Any) -> Optional[int]:
+    """1/0 for on/off text when the PF attribute is an integer, else None."""
+    if not isinstance(existing, int) or isinstance(existing, bool):
+        return None
+    if not isinstance(value, str):
+        return None
+    token = value.strip().lower()
+    if token in _FLAG_ON:
+        return 1
+    if token in _FLAG_OFF:
+        return 0
+    return None
+
+
 def _is_number(value: Any) -> bool:
     if isinstance(value, bool):
         return False
@@ -835,6 +853,17 @@ def set_attribute(
                 return True
             return updates
 
+        flag = _flag_value(setting_value, existing_setting)
+        if flag is not None:
+            # 'on'/'off' text for an integer (switch/enable) attribute.
+            # This used to fall through to the 9999 fallback below, which
+            # for an 'off' wrote a non-zero (i.e. ON) value: SMF3A+B_J50
+            # e:ModFrame on NSPTOC1/PHLPTOC1, Brendale 2026-10-03.
+            if flag != existing_setting:
+                _set_or_reject(element, attribute, flag, device_object)
+                return True
+            return updates
+
         try:
             numeric = float(setting_value)
         except (TypeError, ValueError):
@@ -868,7 +897,10 @@ def set_attribute(
     else:
         # Setting needs adjustment based on mapping file
         setting_value = setting_adjustment(app, line, setting_dictionary, device_object)
-        if not setting_value:
+        if setting_value is None:
+            # 'is None', not 'not': an adjusted value of 0 is a real setting
+            # (determine_on_off's 0, a 0 s delay, an 'x - n' that nets 0).
+            # The falsy test dropped them and left the old value in place.
             return updates
         existing_setting = element.GetAttribute(attribute)
         try:
