@@ -182,9 +182,11 @@ def main(app=None, batch=True):
                     app.PrintError(f"  {error}")
                 logger.error(f"Configuration validation failed: {result.errors}")
                 return None
-            # Print warnings but continue
+            # Print warnings but continue. PrintWarn is invisible in
+            # headless runs, so they are logged as well.
             for warning in result.warnings:
                 app.PrintWarn(warning)
+                logger.warning(f"Configuration: {warning}")
         else:
             # Interactive mode: standard validation, faster startup
             # require_valid_config() will exit automatically if invalid

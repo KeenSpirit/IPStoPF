@@ -33,6 +33,10 @@ from logging_config import get_logger
 
 logger = get_logger(__name__)
 
+# NetDash (http://eq09808/netdashapi/) is decommissioned. Leave False so an
+# ODS outage fails the project instead of timing out per setting ID.
+ALLOW_NETDASH_FALLBACK = False
+
 # Cache for setting indexes to avoid rebuilding on repeated calls
 _index_cache: Dict[str, SettingIndex] = {}
 
@@ -269,8 +273,17 @@ def batch_settings(
                     connection, set_ids, sql, skip_empty_setting=skip_empty
                 )
         except ods_connection.ODSUnavailable as exc:
-            # Connection-level failure only - query errors propagate. Fall back
-            # to the NetDash per-ID fetch so the run still completes.
+            # Connection-level failure only - query errors propagate.
+            if not ALLOW_NETDASH_FALLBACK:
+                # NetDash is decommissioned: the per-ID fallback can only
+                # time out, one setting ID at a time. Fail this project
+                # loudly; the mastering layer records it and moves on.
+                error_message(
+                    app,
+                    f"ODS unavailable for the settings fetch ({exc}); the "
+                    f"NetDash fallback is disabled because NetDash is "
+                    f"decommissioned",
+                )
             logger.warning(
                 f"ODS bulk fetch unavailable ({exc}); falling back to NetDash "
                 f"per-ID fetch for {len(set_ids)} setting IDs"
