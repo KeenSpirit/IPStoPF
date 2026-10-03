@@ -226,8 +226,20 @@ def ergon_all_dev_list(
         if i % 10 == 0:
             logger.info(f"IPS is being checked for device {i} of {len(prot_devices)}")
 
-        # Delete duplicate devices (names ending with parentheses)
+        # Delete duplicate devices (names ending with parentheses). This
+        # was silent: no log line and no results-CSV row, so a deletion
+        # could not be traced. Recorded before Delete() (info_record reads
+        # loc_name/cpGrid off the object).
         if pf_device.loc_name.endswith(")"):
+            data_capture_list.append(
+                UpdateResult.info_record(
+                    pf_device, "Deleted - duplicate name ending ')'"
+                )
+            )
+            logger.info(
+                f"{pf_device.loc_name}: name ends with ')' (PowerFactory "
+                f"duplicate-name suffix); deleted"
+            )
             pf_device.Delete()
             continue
 
