@@ -183,7 +183,16 @@ class ProtectionDevice:
             k: v for k, v in sets.items()
             if v["reader"] not in UNTRUSTED_READERS
         } or sets
-        chosen = max(trusted, key=lambda k: str(trusted[k]["date"] or ""))
+        # Latest import wins. On equal (or missing) dates the old max() kept
+        # whichever set came first - X8662-B used 'As Issued' over 'As
+        # Applied' with both undated (Beenleigh 2026-10-03). Ties now prefer
+        # a field set (Applied / As Left / As Found) over an Issued one,
+        # then the set id, so the choice no longer depends on row order.
+        chosen = max(
+            trusted,
+            key=lambda k: (str(trusted[k]["date"] or ""),
+                           _set_name_rank(trusted[k]["name"]), str(k)),
+        )
 
         used = {
             (r.get("blockpathenu"), r.get("paramnameenu"))
@@ -354,6 +363,17 @@ class ProtectionDevice:
     def __str__(self) -> str:
         """String representation."""
         return f"{self.name} ({self.device})"
+
+
+def _set_name_rank(name: str) -> int:
+    """Tie-break rank of an IPS parameter-set name: field > other > issued."""
+    text = str(name or "").lower().replace("_", " ")
+    compact = text.replace(" ", "")
+    if "applied" in text or "asleft" in compact or "asfound" in compact:
+        return 2
+    if "issued" in text:
+        return 0
+    return 1
 
 
 def _as_int(value: Any, default: int) -> int:
