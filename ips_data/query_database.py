@@ -539,6 +539,46 @@ def _fetch_settings_in_batches(
     return ips_settings
 
 
+# Instrument-transformer report rows, read once per process. The report is
+# region-wide and identical for every project of a run; re-reading it cost
+# 60-83 s per Ergon project (48,437 rows) and 11-12 s per Energex project
+# on 2026-10-03.
+_it_report_cache: Dict[str, List] = {}
+
+
+def _it_report_rows(report: str) -> List:
+    rows = _it_report_cache.get(report)
+    if rows is None:
+        # get_cached_data returns a lazy generator: materialise it so the
+        # row count is knowable, exceptions surface here rather than
+        # mid-iteration, and a truthiness check is meaningful.
+        rows = list(get_cached_data(report, max_age=3) or [])
+        if rows:
+            _it_report_cache[report] = rows
+    return rows
+
+
+def _get_it_details(report: str, label: str, devices: List[str]) -> List:
+    device_set = set(devices)
+    it_set_db = _it_report_rows(report)
+    ips_settings = [
+        setting for setting in it_set_db
+        if setting.relaysettingid in device_set
+    ]
+    if not it_set_db:
+        logger.warning(
+            f"IT details ({label}): cached report returned 0 rows - source "
+            f"empty or unreachable; CT/VT data will be missing for ALL relays"
+        )
+    else:
+        logger.info(
+            f"IT details ({label}): cached report has {len(it_set_db)} rows; "
+            f"{len(ips_settings)} matched this run's {len(device_set)} "
+            f"setting IDs"
+        )
+    return ips_settings
+
+
 def seq_get_ips_it_details(app, devices: List[str]) -> List:
     """
     Get instrument transformer details for Energex (SEQ) devices.
@@ -553,35 +593,7 @@ def seq_get_ips_it_details(app, devices: List[str]) -> List:
     Returns:
         List of IT setting records that match the given devices
     """
-    device_set = set(devices)  # Convert to set for O(1) lookup
-
-    # get_cached_data returns a lazy generator: materialise it so the row
-    # count is knowable, exceptions surface here rather than mid-iteration,
-    # and a truthiness check is meaningful (a generator is always truthy,
-    # which is why an empty report previously read as a successful fetch).
-    it_set_db = list(
-        get_cached_data("Report-Cache-ProtectionITSettings-EX", max_age=3) or []
-    )
-
-    n_source = len(it_set_db)
-    ips_settings = [
-        setting for setting in it_set_db
-        if setting.relaysettingid in device_set
-    ]
-
-    if n_source == 0:
-        logger.warning(
-            "IT details (EE): cached report returned 0 rows - source empty "
-            "or unreachable; CT/VT data will be missing for ALL relays"
-        )
-    else:
-        logger.info(
-            f"IT details (EE): cached report returned {n_source} rows; "
-            f"{len(ips_settings)} matched this run's {len(device_set)} "
-            f"setting IDs"
-        )
-
-    return ips_settings
+    return _get_it_details("Report-Cache-ProtectionITSettings-EX", "EX", devices)
 
 
 def reg_get_ips_it_details(app, devices: List[str]) -> List:
@@ -598,35 +610,7 @@ def reg_get_ips_it_details(app, devices: List[str]) -> List:
     Returns:
         List of IT setting records that match the given devices
     """
-    device_set = set(devices)  # Convert to set for O(1) lookup
-
-    # get_cached_data returns a lazy generator: materialise it so the row
-    # count is knowable, exceptions surface here rather than mid-iteration,
-    # and a truthiness check is meaningful (a generator is always truthy,
-    # which is why an empty report previously read as a successful fetch).
-    it_set_db = list(
-        get_cached_data("Report-Cache-ProtectionITSettings-EE", max_age=3) or []
-    )
-
-    n_source = len(it_set_db)
-    ips_settings = [
-        setting for setting in it_set_db
-        if setting.relaysettingid in device_set
-    ]
-
-    if n_source == 0:
-        logger.warning(
-            "IT details (EE): cached report returned 0 rows - source empty "
-            "or unreachable; CT/VT data will be missing for ALL relays"
-        )
-    else:
-        logger.info(
-            f"IT details (EE): cached report returned {n_source} rows; "
-            f"{len(ips_settings)} matched this run's {len(device_set)} "
-            f"setting IDs"
-        )
-
-    return ips_settings
+    return _get_it_details("Report-Cache-ProtectionITSettings-EE", "EE", devices)
 
 
 def seq_get_ips_settings(app, set_id: str) -> Dict[str, List[Dict]]:

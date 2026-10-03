@@ -119,30 +119,7 @@ def add_relay_skeletons(app, network_level, selected_grid=None, project=None):
     logger.debug("Deleting PDS elements")
     remove_pds_elements(project)
 
-    # Get information from GISEP/Ellipse
-    logger.info("Getting Relay Information")
-    relay_info = get_cached_data(report="List-RelayCBs", max_age=3)
-    logger.debug("Got Relays")
-    logger.info("Getting Recloser Information")
-    recloser_info = get_cached_data(report="List-Reclosers", max_age=3)
-    logger.debug("Got Reclosers")
-    logger.info("Getting Fuse Information")
-    fuses_info = get_cached_data(report="List-Fuses", max_age=3)
-    logger.debug("Got Fuses")
-    logger.info("Getting Gas Switch Information")
-    gas_switch_info = get_cached_data(report="List-GasSwitches", max_age=3)
-    logger.debug("Got Gas Switch")
-
-    # Building Dictionaries
-    logger.info("Building Relay Dictionary")
-    relay_dict = produce_switch_based_dict(relay_info)
-    logger.info("Building Recloser Dictionary")
-    recloser_dict = produce_line_switch_based_dict(recloser_info)
-    logger.info("Building Fuse Dictionary")
-    fuse_dict = produce_line_switch_based_dict(fuses_info)
-    logger.info("Building Gas Switch Dictionary")
-    gas_switch_dict = produce_line_switch_based_dict(gas_switch_info)
-    logger.info("Dictionaries Built")
+    relay_dict, recloser_dict, fuse_dict, gas_switch_dict = _skeleton_dicts()
 
     if network_level == NETWORK_DISTRIBUTION:
         # Feeder-CB gating applies: build the list of feeder CBs and
@@ -192,6 +169,44 @@ def add_relay_skeletons(app, network_level, selected_grid=None, project=None):
         f"({num_elements} elements checked)"
     )
     return all_new
+
+
+# The four GISEP/Ellipse dictionaries are region-wide and identical for
+# every project of a run; building them took ~27 s per Ergon project on
+# 2026-10-03. Built once per process.
+_SKELETON_DICTS = None
+
+
+def _skeleton_dicts():
+    """(relay, recloser, fuse, gas switch) dictionaries, built once."""
+    global _SKELETON_DICTS
+    if _SKELETON_DICTS is not None:
+        logger.info("Skeleton dictionaries reused from an earlier project")
+        return _SKELETON_DICTS
+
+    logger.info("Getting Relay Information")
+    relay_info = get_cached_data(report="List-RelayCBs", max_age=3)
+    logger.info("Getting Recloser Information")
+    recloser_info = get_cached_data(report="List-Reclosers", max_age=3)
+    logger.info("Getting Fuse Information")
+    fuses_info = get_cached_data(report="List-Fuses", max_age=3)
+    logger.info("Getting Gas Switch Information")
+    gas_switch_info = get_cached_data(report="List-GasSwitches", max_age=3)
+
+    logger.info("Building Relay Dictionary")
+    relay_dict = produce_switch_based_dict(relay_info)
+    logger.info("Building Recloser Dictionary")
+    recloser_dict = produce_line_switch_based_dict(recloser_info)
+    logger.info("Building Fuse Dictionary")
+    fuse_dict = produce_line_switch_based_dict(fuses_info)
+    logger.info("Building Gas Switch Dictionary")
+    gas_switch_dict = produce_line_switch_based_dict(gas_switch_info)
+    logger.info("Dictionaries Built")
+
+    built = (relay_dict, recloser_dict, fuse_dict, gas_switch_dict)
+    if any(built):
+        _SKELETON_DICTS = built
+    return built
 
 
 def remove_pds_elements(project):

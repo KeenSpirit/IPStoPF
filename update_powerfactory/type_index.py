@@ -404,6 +404,61 @@ class FuseTypeIndex:
 
 
 # =============================================================================
+# Process-level reuse across projects
+# =============================================================================
+#
+# Every type the indexes hold lives OUTSIDE the project: ErgonLibrary and
+# the DIgSILENT library (global) and the user's own Protection folder. The
+# indexes are therefore the same for every project of a fleet run, yet
+# were rebuilt per project: 14.0 min for the first project on 2026-10-03
+# (DIgSILENT path-cache resolution 11.5 min) and 1.4 min for each one
+# after, i.e. ~1.8 h per 80-project run. They are now built once per
+# process and reused while their objects are still readable.
+
+_PROCESS_INDEXES: Dict[str, Any] = {}
+
+
+def _still_readable(objects: List[Any], sample: int = 3) -> bool:
+    """True if a few indexed PF objects still answer (not deleted/stale)."""
+    try:
+        for obj in objects[:sample]:
+            if obj is None or not obj.loc_name:
+                return False
+            if hasattr(obj, "IsDeleted") and obj.IsDeleted():
+                return False
+    except Exception:  # PF raises bare runtime errors on dead handles
+        return False
+    return True
+
+
+def cached_relay_index(app) -> RelayTypeIndex:
+    """RelayTypeIndex.build, reused across projects of one process."""
+    index = _PROCESS_INDEXES.get("relay")
+    if index is not None and _still_readable(index.get_all()):
+        logger.info(f"Type index: reusing the relay type index ({len(index)} types)")
+        return index
+    index = RelayTypeIndex.build(app)
+    _PROCESS_INDEXES["relay"] = index
+    return index
+
+
+def cached_fuse_index(app) -> FuseTypeIndex:
+    """FuseTypeIndex.build, reused across projects of one process."""
+    index = _PROCESS_INDEXES.get("fuse")
+    if index is not None and len(index) and _still_readable(index.get_all()):
+        logger.info(f"Type index: reusing the fuse type index ({len(index)} types)")
+        return index
+    index = FuseTypeIndex.build(app)
+    _PROCESS_INDEXES["fuse"] = index
+    return index
+
+
+def clear_process_indexes() -> None:
+    """Force the next update_pf to rebuild both indexes."""
+    _PROCESS_INDEXES.clear()
+
+
+# =============================================================================
 # Factory functions for convenience
 # =============================================================================
 

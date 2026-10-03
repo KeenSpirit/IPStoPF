@@ -62,3 +62,20 @@ def test_ods_outage_fails_loudly_instead_of_netdash(monkeypatch):
 def test_both_batch_sqls_filter_null_actuals_server_side():
     for sql in (qd.ENERGEX_BATCH_SQL, qd.ERGON_BATCH_SQL):
         assert "actual is not null" in " ".join(sql.lower().split())
+
+
+def test_it_report_read_once_per_process(monkeypatch):
+    from types import SimpleNamespace as Row
+    reads = []
+
+    def fake(report, max_age):
+        reads.append(report)
+        return iter([Row(relaysettingid="S1"), Row(relaysettingid="S2")])
+
+    monkeypatch.setattr(qd, "get_cached_data", fake)
+    monkeypatch.setattr(qd, "_it_report_cache", {})
+    assert len(qd.reg_get_ips_it_details(None, ["S1"])) == 1
+    assert len(qd.reg_get_ips_it_details(None, ["S1", "S2"])) == 2
+    assert len(qd.seq_get_ips_it_details(None, ["S2"])) == 1
+    assert reads == ["Report-Cache-ProtectionITSettings-EE",
+                     "Report-Cache-ProtectionITSettings-EX"]
