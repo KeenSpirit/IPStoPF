@@ -165,7 +165,7 @@ def ensure_directory_exists(path: str) -> str:
 
 
 def get_citrix_adjusted_path(local_path: str) -> str:
-    """
+    r"""
     Adjust a local path for Citrix environment if necessary.
 
     When running in Citrix, local C: drive paths need to be accessed
