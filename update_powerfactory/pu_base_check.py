@@ -58,6 +58,7 @@ Never raises: every failure is logged and skipped, so a bad element cannot
 end a project or the fleet run.
 """
 
+import math
 from typing import Any, Dict, List, Optional, Tuple
 
 from logging_config import get_logger
@@ -79,6 +80,10 @@ _TOL = 0.01
 # Below this the element is either disabled or a fallback value; a relative
 # comparison against it is meaningless.
 _MIN_IPSET = 1e-9
+
+# At or above this (pu) the pickup is a "disabled" placeholder, not a
+# setting: IPS/PF use inf or 1e7 for stages that are off.
+_DISABLED_IPSET = 1e6
 
 ATTR_IPSET = "e:Ipset"
 ATTR_CPIPSET = "e:cpIpset"
@@ -118,15 +123,17 @@ def _ct_taps(ct: Any) -> Tuple[Optional[float], Optional[float]]:
 def _pickup_elements(relay: Any) -> List[Any]:
     """Every child element exposing both Ipset and cpIpset."""
     found: List[Any] = []
+    children: List[Any] = []
     try:
-        children = relay.GetContents("*", 1)
+        # Filter by class on the server: GetContents("*") returned every
+        # object in the relay and cost a GetClassName call on each.
+        for cls in PICKUP_CLASSES:
+            children.extend(relay.GetContents(f"*.{cls}", 1))
     except Exception as exc:
         logger.warning(f"{_name(relay)}: GetContents failed ({exc})")
         return found
     for child in children:
         try:
-            if child.GetClassName() not in PICKUP_CLASSES:
-                continue
             child.GetAttribute(ATTR_IPSET)
             child.GetAttribute(ATTR_CPIPSET)
         except (AttributeError, RuntimeError):
@@ -172,6 +179,12 @@ def _check_element(
         return
 
     if ipset is None or cpipset is None or abs(ipset) < _MIN_IPSET:
+        summary["skipped"] += 1
+        return
+    if not math.isfinite(ipset) or ipset >= _DISABLED_IPSET:
+        # A disabled stage (inf or a 1e7 placeholder pickup). Nothing to
+        # verify; these produced 'not the stale-base signature' warnings
+        # every run (MURGSS-FB54/55-J01-50/51E, BILOSS-FB53-J01-EF).
         summary["skipped"] += 1
         return
 
@@ -262,10 +275,16 @@ def finalise_pu_derivations(app, device_list: List[Any]) -> Dict[str, int]:
         "skipped": 0,
     }
 
+    seen = set()
     for device_object in device_list:
         relay = getattr(device_object, "pf_obj", None)
         if relay is None:
             continue
+        # Double-cable-box ('A+B') records put the same relay in the list
+        # more than once; check it once.
+        if relay in seen:
+            continue
+        seen.add(relay)
         try:
             if relay.GetClassName() != "ElmRelay":
                 continue
