@@ -98,7 +98,8 @@ def write_dict_list_to_csv(
         data: List[Dict[str, Any]],
         filepath: str,
         encoding: str = "utf-8",
-        append: bool = False
+        append: bool = False,
+        fieldnames: Optional[List[str]] = None,
 ) -> None:
     """
     Write a list of dictionaries to a CSV file.
@@ -119,8 +120,8 @@ def write_dict_list_to_csv(
         logger.warning(f"No data to write to {filepath}")
         return
 
-    # Collect all column headings from all rows
-    col_headings = []
+    # Fixed columns first (when given), then any other keys in first-seen order
+    col_headings = list(fieldnames or [])
     for row_dict in data:
         for key in row_dict:
             if key not in col_headings:

@@ -24,6 +24,30 @@ from logging_config import get_logger
 
 logger = get_logger(__name__)
 
+# Field name -> CSV column, in output order. SETTING_ID is last so existing
+# column positions are unchanged.
+CSV_FIELDS = {
+    'substation': 'SUBSTATION',
+    'plant_number': 'PLANT_NUMBER',
+    'relay_pattern': 'RELAY_PATTERN',
+    'used_pattern': 'USED_PATTERN',
+    'date_setting': 'DATE_SETTING',
+    'result': 'RESULT',
+    'ct_name': 'CT_NAME',
+    'ct_result': 'CT_RESULT',
+    'vt_name': 'VT_NAME',
+    'vt_result': 'VT_RESULT',
+    'cb_name': 'CB_NAME',
+    'error_detail': 'ERROR_DETAIL',
+    'setting_id': 'SETTING_ID',
+}
+
+# Every results CSV carries all of these, in this order, whatever rows it
+# holds. The header used to be the union of keys in first-seen order, so
+# column positions differed between projects (CB_NAME only on Energex runs).
+CSV_COLUMNS = list(CSV_FIELDS.values())
+
+
 @dataclass
 class UpdateResult:
     """
@@ -84,6 +108,9 @@ class UpdateResult:
     # Error handling
     error_detail: Optional[str] = None
 
+    # IPS relay setting ID the row was produced from (traceability)
+    setting_id: Optional[str] = None
+
     @classmethod
     def from_device(cls, device_object: Any, app: Any = None) -> 'UpdateResult':
         """
@@ -120,6 +147,7 @@ class UpdateResult:
             relay_pattern=getattr(device_object, 'device', None),
             used_pattern=getattr(device_object, 'device', None),
             date_setting=getattr(device_object, 'date', None),
+            setting_id=getattr(device_object, 'setting_id', None),
         )
 
     @classmethod
@@ -228,24 +256,8 @@ class UpdateResult:
             >>> result.to_dict()
             {'SUBSTATION': 'SUB_A', 'RESULT': 'OK'}
         """
-        # Field name to CSV column name mapping
-        field_mapping = {
-            'substation': 'SUBSTATION',
-            'plant_number': 'PLANT_NUMBER',
-            'relay_pattern': 'RELAY_PATTERN',
-            'used_pattern': 'USED_PATTERN',
-            'date_setting': 'DATE_SETTING',
-            'result': 'RESULT',
-            'ct_name': 'CT_NAME',
-            'ct_result': 'CT_RESULT',
-            'vt_name': 'VT_NAME',
-            'vt_result': 'VT_RESULT',
-            'cb_name': 'CB_NAME',
-            'error_detail': 'ERROR_DETAIL',
-        }
-
         result_dict = {}
-        for field_name, csv_name in field_mapping.items():
+        for field_name, csv_name in CSV_FIELDS.items():
             value = getattr(self, field_name)
             if value is not None and value != "":
                 result_dict[csv_name] = str(value)
