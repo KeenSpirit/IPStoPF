@@ -261,8 +261,13 @@ def batch_settings(
 
     if batch:
         sql = ENERGEX_BATCH_SQL if region == "Energex" else ERGON_BATCH_SQL
-        # Energex filters empty settings in SQL (relayparam.actual IS NOT NULL);
-        # Ergon filters them in Python, mirroring the legacy behaviour.
+        # Both SQLs filter RelayParam.Actual IS NOT NULL. Ergon keeps the
+        # Python filter as well: an Enum whose item has no text still
+        # yields an empty ProposedSetting. Before the SQL filter was added
+        # to the Ergon query, 63-76% of fetched rows were discarded in
+        # Python (Gladstone 554,474 fetched / 203,870 kept, South Burnett
+        # 423,713 / 101,135 on 2026-10-03). Rows with Actual NULL always
+        # have an empty ProposedSetting, so the kept set is unchanged.
         skip_empty = region != "Energex"
         fetch_func = (
             seq_get_ips_settings if region == "Energex" else reg_get_ips_settings
@@ -403,6 +408,7 @@ FROM    EDW_LDG_OWNER.IPS_RelParBlock RelParBlock_2
                 RelParModel.RelParEnumID = RelParEnum.RelParEnumID
         ) ON RelParBlock_1.RelParBlockID = RelParBlock.ParentRowID
 WHERE RelaySetting.RelaySettingID IN ({in_clause})
+    AND RelayParam.Actual IS NOT NULL
 ORDER BY RelaySetting.AssetID, RelaySetting.RelaySettingID,
     RelayParamSet.RelayParamSetID, RelParModel.RelParModelID
 """

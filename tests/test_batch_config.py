@@ -57,3 +57,8 @@ def test_ods_outage_fails_loudly_instead_of_netdash(monkeypatch):
                         lambda *a: pytest.fail("NetDash fallback used"))
     with pytest.raises(qd.TransferError):
         qd.batch_settings(_App(), "Ergon", True, ["S1"])
+
+
+def test_both_batch_sqls_filter_null_actuals_server_side():
+    for sql in (qd.ENERGEX_BATCH_SQL, qd.ERGON_BATCH_SQL):
+        assert "actual is not null" in " ".join(sql.lower().split())
