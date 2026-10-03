@@ -124,7 +124,8 @@ def add_relay_skeletons(app, network_level, selected_grid=None, project=None):
     if network_level == NETWORK_DISTRIBUTION:
         # Feeder-CB gating applies: build the list of feeder CBs and
         # scan the whole project for switches only.
-        feeder_cbs = produce_list_of_model_feeder_cbs(project)
+        # A set: membership is tested for every substation switch.
+        feeder_cbs = set(produce_list_of_model_feeder_cbs(project))
         logger.info("Feeder CBs Identified")
 
         elm_coups = project.GetContents("*.ElmCoup", True)
@@ -330,6 +331,19 @@ def process_switch_for_relay_check(
     None (subtransmission mode - no feeder-CB gating).
     """
 
+    # Get the expected foreign key (ellipse ID)
+    foreign_key = elm.GetAttribute("for_name")
+    ecorp_id = ellipse_ecorp_asset_id_extraction(foreign_key, network_level)
+
+    # Most elements carry no protection device at all (2981 of 5379 in
+    # Gladstone on 2026-10-03). Leave before any further PowerFactory call
+    # for those: the feeder-CB test below cost a GetParent, a GetClassName
+    # and a list scan of PF objects per element.
+    if not any(
+        ecorp_id in d for d in (relay_dict, recloser_dict, fuse_dict, gas_switch_dict)
+    ):
+        return []
+
     # Distribution only: ignore switches in the substation that are not
     # feeder CBs. Not short-circuited so the error message can be more
     # detailed.
@@ -339,13 +353,6 @@ def process_switch_for_relay_check(
         if parent.GetClassName() == "ElmSubstat":
             if elm not in feeder_cbs:
                 pot_feeder_cb = False
-
-    # Get the expected foreign key (ellipse ID)
-    foreign_key = elm.GetAttribute("for_name")
-    ecorp_id = ellipse_ecorp_asset_id_extraction(foreign_key, network_level)
-
-    if ecorp_id == "25268198":
-        logger.debug(f"** {elm} should have multiple relays")
 
     # Now process each type of protection device sequentially for
     # information associated with the switch
