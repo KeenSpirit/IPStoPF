@@ -393,6 +393,10 @@ def check_relay_type(
         app.PrintWarn(
             f"Relay type '{mapping_type}' not found for {device_object.name}"
         )
+        logger.warning(
+            f"{device_object.name}: relay type '{mapping_type}' not found in "
+            f"the type index; relay set out of service"
+        )
         pf_device.SetAttribute("outserv", 1)
         result.result = f"Type not found: {mapping_type}"
 
@@ -519,6 +523,9 @@ def create_setting_dictionary(
     setting_dictionary = {}
     collisions: Dict[str, List[str]] = {}
     sources: Dict[str, str] = {}
+    # Readable 'folder/element/attribute' for each key: the key itself is
+    # the three joined with no separator ('SPE20A+B_J80I2>Tpset').
+    labels: Dict[str, str] = {}
 
     for setting in settings:
         lines = mapping_file
@@ -556,6 +563,7 @@ def create_setting_dictionary(
                         seen.append(f"{converted!r} <- {setting[0]}{setting[1]}")
                     setting_dictionary[key] = converted
                     sources[key] = f"{setting[0]}{setting[1]}"
+                    labels[key] = "/".join(str(part) for part in line[:3])
                     continue
                 elif (
                     str(line[index]) != str(value)
@@ -579,10 +587,11 @@ def create_setting_dictionary(
         # so the mapping row at fault can be found without an IPS export.
         logger.warning(
             "%s: %d PF attribute(s) mapped from more than one IPS setting "
-            "with different values; last value used: %s",
+            "with different values (mapping file has two rows for one "
+            "attribute); last value used: %s",
             getattr(pf_device, "loc_name", "?"), len(collisions),
             "; ".join(
-                f"{key}: {values}" for key, values in
+                f"{labels.get(key, key)}: {values}" for key, values in
                 sorted(collisions.items())[:10]
             ),
         )
