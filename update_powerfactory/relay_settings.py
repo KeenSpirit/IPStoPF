@@ -249,7 +249,8 @@ def relay_settings(
     if reclose_status and not result.result:
         result.result = reclose_status
     update_logic_elements(
-        app, device_object.pf_obj, mapping_file, setting_dict, find_element
+        app, device_object.pf_obj, mapping_file, setting_dict,
+        make_element_finder(device_object.pf_obj),
     )
 
     # Update CT and VT settings. The CT/VT library folders are resolved once
@@ -627,6 +628,7 @@ def apply_settings(
     # and pickups that carry a real value in this setting file.
     disabled_elements: Dict[Tuple[str, str], Any] = {}
     enabled_elements: Dict[Tuple[str, str], Any] = {}
+    find = make_element_finder(pf_device)
 
     for mapped_set in mapping_file:
         # Skip logic elements (handled by sub-modules)
@@ -638,7 +640,7 @@ def apply_settings(
             continue
 
         # Get the PowerFactory object for the setting
-        element = find_element(app, pf_device, mapped_set)
+        element = find(app, pf_device, mapped_set)
         if not element:
             app.PrintError(f"Unable to find an element for {mapped_set}")
             continue
@@ -734,6 +736,36 @@ def _apply_pickup_enable_state(
             )
 
     return updates
+
+
+def make_element_finder(pf_device: Any):
+    """
+    A find_element() for one relay, backed by a (folder, name) index.
+
+    find_element() runs a recursive GetContents per mapping row - a few
+    hundred per relay. The index is one recursive GetContents per relay;
+    a miss (wildcard or case differences that GetContents tolerates) falls
+    back to find_element(), so results are unchanged.
+    """
+    index: Dict[Tuple[str, str], Any] = {}
+    try:
+        for obj in pf_device.GetContents("*", True):
+            try:
+                key = (obj.fold_id.loc_name, obj.loc_name)
+            except AttributeError:
+                continue
+            index.setdefault(key, obj)
+    except Exception:  # PF raises bare errors on odd objects; fall back
+        index = {}
+
+    def find(app, pf_object: Any, line: List) -> Optional[Any]:
+        if pf_object is pf_device:
+            hit = index.get((line[0], line[1]))
+            if hit is not None:
+                return hit
+        return find_element(app, pf_object, line)
+
+    return find
 
 
 def find_element(app, pf_object: Any, line: List) -> Optional[Any]:
