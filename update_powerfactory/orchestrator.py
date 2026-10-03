@@ -24,7 +24,12 @@ from update_powerfactory import fuse_settings as fs
 from update_powerfactory import ct_settings as cs
 from update_powerfactory import vt_settings as vs
 from update_powerfactory import pu_base_check as pbc
-from update_powerfactory.type_index import RelayTypeIndex, FuseTypeIndex
+from update_powerfactory.type_index import (
+    RelayTypeIndex,
+    FuseTypeIndex,
+    cached_relay_index,
+    cached_fuse_index,
+)
 from core import UpdateResult
 from config.relay_patterns import RELAYS_OOS
 from logging_config import get_logger, log_device_atts
@@ -62,11 +67,11 @@ def update_pf(
     import time as _time
     logger.info("Creating indexed database of PowerFactory Fuse and Relay Types")
     _t0 = _time.monotonic()
-    relay_index = RelayTypeIndex.build(app)
-    logger.info(f"Relay type index built: {len(relay_index)} types in {_time.monotonic() - _t0:.1f} s")
+    relay_index = cached_relay_index(app)
+    logger.info(f"Relay type index ready: {len(relay_index)} types in {_time.monotonic() - _t0:.1f} s")
     _t0 = _time.monotonic()
-    fuse_index = FuseTypeIndex.build(app)
-    logger.info(f"Fuse type index built: {len(fuse_index)} types in {_time.monotonic() - _t0:.1f} s")
+    fuse_index = cached_fuse_index(app)
+    logger.info(f"Fuse type index ready: {len(fuse_index)} types in {_time.monotonic() - _t0:.1f} s")
 
     # Resolve the CT/VT library folders ONCE for the whole run. Each lookup is a
     # full recursive walk of the local library; doing it per device (as the old

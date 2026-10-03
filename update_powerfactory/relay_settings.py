@@ -170,6 +170,16 @@ def relay_settings(
         )
         return result, updates
 
+    # Classify single-pole relays BEFORE the mapping lookup. determine_phase
+    # appends "_Earth" to the pattern for earth-fault relays, and
+    # type_mapping.csv has separate "<pattern>_Earth" rows (e.g.
+    # MCGG22_Earth -> "MCGG-22 Earth"). Classifying after the lookup meant
+    # every earth-fault single-pole relay was typed and set from the PHASE
+    # row (Gladstone 2026-10-03: FILASS-...-EF-E, ICIZSS-...-EF-E,
+    # MOURSS-...-N-E typed MCGG-2x_Phase). Pure name logic - no PF writes
+    # move, the RelMeasure iphase write still follows check_relay_type.
+    phase = determine_phase(app, device_object)
+
     # Load mapping file for this relay pattern. CT secondary selects the
     # correct PowerFactory model for patterns that are CT-dependent.
     mapping_file, mapping_type = mf.read_mapping_file(
@@ -183,7 +193,6 @@ def relay_settings(
     )
 
     # Configure phase for single-phase relays
-    phase = determine_phase(app, device_object)
     if phase is not None:
         meas_elems = device_object.pf_obj.GetContents("*.RelMeasure")
         if meas_elems:
@@ -216,9 +225,14 @@ def relay_settings(
     updates = apply_settings(app, device_object, mapping_file, setting_dict, updates)
 
     # Delegate specialized configuration to sub-modules
-    update_reclosing_logic(app, device_object, mapping_file, setting_dict)
+    reclose_status = update_reclosing_logic(
+        app, device_object, mapping_file, setting_dict
+    )
+    if reclose_status and not result.result:
+        result.result = reclose_status
     update_logic_elements(
-        app, device_object.pf_obj, mapping_file, setting_dict, find_element
+        app, device_object.pf_obj, mapping_file, setting_dict,
+        make_element_finder(device_object.pf_obj),
     )
 
     # Update CT and VT settings. The CT/VT library folders are resolved once
@@ -361,6 +375,10 @@ def check_relay_type(
         app.PrintWarn(
             f"Relay type '{mapping_type}' not found for {device_object.name}"
         )
+        logger.warning(
+            f"{device_object.name}: relay type '{mapping_type}' not found in "
+            f"the type index; relay set out of service"
+        )
         pf_device.SetAttribute("outserv", 1)
         result.result = f"Type not found: {mapping_type}"
 
@@ -418,10 +436,9 @@ def determine_phase(app, device_object: Any) -> Optional[int]:
     if device_object.device not in SINGLE_PHASE_RELAYS:
         return None
 
-    try:
-        name = device_object.seq_name
-    except AttributeError:
-        name = device_object.name
+    # Energex devices carry the IPS asset name in seq_name; Ergon devices
+    # have no seq_name and use the asset name in .name. Either may be None.
+    name = getattr(device_object, "seq_name", None) or device_object.name or ""
 
     # Check for phase suffix in last 6 characters of name
     name_suffix = name[-6:]
@@ -431,17 +448,30 @@ def determine_phase(app, device_object: Any) -> Optional[int]:
             return phase
 
     # Check if it is an Earth Fault relay
-    for pattern in EARTH_FAULT_PATTERNS:
-        if pattern in name_suffix:
-            device_object.device = f"{device_object.device}_Earth"
-            return None
-
+    is_earth = any(pattern in name_suffix for pattern in EARTH_FAULT_PATTERNS)
     # Check for trailing "E" indicating earth fault
-    if name and name[-1] == "E":
-        device_object.device = f"{device_object.device}_Earth"
+    if not is_earth and name and name[-1] == "E":
+        is_earth = True
+
+    if is_earth:
+        earth_pattern = f"{device_object.device}_Earth"
+        if mf.get_type_mapping(earth_pattern) is None:
+            # No "_Earth" row: keep the phase row rather than send the
+            # relay to "Mapping file not found" (the pre-fix behaviour).
+            logger.warning(
+                f"{name}: earth-fault single-pole relay but type_mapping.csv "
+                f"has no '{earth_pattern}' row; using the '{device_object.device}' "
+                f"(phase) row"
+            )
+            return None
+        device_object.device = earth_pattern
         return None
 
     # Default to Phase A if no match found
+    logger.info(
+        f"{name}: single-pole relay with no phase or earth marker in the "
+        f"name; defaulting to phase A"
+    )
     return 0
 
 
@@ -475,6 +505,9 @@ def create_setting_dictionary(
     setting_dictionary = {}
     collisions: Dict[str, List[str]] = {}
     sources: Dict[str, str] = {}
+    # Readable 'folder/element/attribute' for each key: the key itself is
+    # the three joined with no separator ('SPE20A+B_J80I2>Tpset').
+    labels: Dict[str, str] = {}
 
     for setting in settings:
         lines = mapping_file
@@ -512,6 +545,7 @@ def create_setting_dictionary(
                         seen.append(f"{converted!r} <- {setting[0]}{setting[1]}")
                     setting_dictionary[key] = converted
                     sources[key] = f"{setting[0]}{setting[1]}"
+                    labels[key] = "/".join(str(part) for part in line[:3])
                     continue
                 elif (
                     str(line[index]) != str(value)
@@ -535,10 +569,11 @@ def create_setting_dictionary(
         # so the mapping row at fault can be found without an IPS export.
         logger.warning(
             "%s: %d PF attribute(s) mapped from more than one IPS setting "
-            "with different values; last value used: %s",
+            "with different values (mapping file has two rows for one "
+            "attribute); last value used: %s",
             getattr(pf_device, "loc_name", "?"), len(collisions),
             "; ".join(
-                f"{key}: {values}" for key, values in
+                f"{labels.get(key, key)}: {values}" for key, values in
                 sorted(collisions.items())[:10]
             ),
         )
@@ -584,6 +619,7 @@ def apply_settings(
     # and pickups that carry a real value in this setting file.
     disabled_elements: Dict[Tuple[str, str], Any] = {}
     enabled_elements: Dict[Tuple[str, str], Any] = {}
+    find = make_element_finder(pf_device)
 
     for mapped_set in mapping_file:
         # Skip logic elements (handled by sub-modules)
@@ -595,7 +631,7 @@ def apply_settings(
             continue
 
         # Get the PowerFactory object for the setting
-        element = find_element(app, pf_device, mapped_set)
+        element = find(app, pf_device, mapped_set)
         if not element:
             app.PrintError(f"Unable to find an element for {mapped_set}")
             continue
@@ -691,6 +727,36 @@ def _apply_pickup_enable_state(
             )
 
     return updates
+
+
+def make_element_finder(pf_device: Any):
+    """
+    A find_element() for one relay, backed by a (folder, name) index.
+
+    find_element() runs a recursive GetContents per mapping row - a few
+    hundred per relay. The index is one recursive GetContents per relay;
+    a miss (wildcard or case differences that GetContents tolerates) falls
+    back to find_element(), so results are unchanged.
+    """
+    index: Dict[Tuple[str, str], Any] = {}
+    try:
+        for obj in pf_device.GetContents("*", True):
+            try:
+                key = (obj.fold_id.loc_name, obj.loc_name)
+            except AttributeError:
+                continue
+            index.setdefault(key, obj)
+    except Exception:  # PF raises bare errors on odd objects; fall back
+        index = {}
+
+    def find(app, pf_object: Any, line: List) -> Optional[Any]:
+        if pf_object is pf_device:
+            hit = index.get((line[0], line[1]))
+            if hit is not None:
+                return hit
+        return find_element(app, pf_object, line)
+
+    return find
 
 
 def find_element(app, pf_object: Any, line: List) -> Optional[Any]:

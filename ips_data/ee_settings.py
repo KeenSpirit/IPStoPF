@@ -226,8 +226,20 @@ def ergon_all_dev_list(
         if i % 10 == 0:
             logger.info(f"IPS is being checked for device {i} of {len(prot_devices)}")
 
-        # Delete duplicate devices (names ending with parentheses)
+        # Delete duplicate devices (names ending with parentheses). This
+        # was silent: no log line and no results-CSV row, so a deletion
+        # could not be traced. Recorded before Delete() (info_record reads
+        # loc_name/cpGrid off the object).
         if pf_device.loc_name.endswith(")"):
+            data_capture_list.append(
+                UpdateResult.info_record(
+                    pf_device, "Deleted - duplicate name ending ')'"
+                )
+            )
+            logger.info(
+                f"{pf_device.loc_name}: name ends with ')' (PowerFactory "
+                f"duplicate-name suffix); deleted"
+            )
             pf_device.Delete()
             continue
 
@@ -669,10 +681,8 @@ def _create_device_from_record(
         None,
     )
 
-    # Load settings if not a batch call
-    if not called_function:
-        ips_settings = qd.reg_get_ips_settings(app, record.relaysettingid)
-        prot_dev.associated_settings(ips_settings)
+    # Settings are bulk-loaded from the ODS by get_ips_settings after
+    # enumeration (the per-device NetDash fetch is decommissioned).
 
     prot_dev.fuse_type = fuse_type
     prot_dev.fuse_size = fuse_size

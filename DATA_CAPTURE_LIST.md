@@ -14,9 +14,11 @@ the primary source for post-run analysis.
 
 ## Columns
 
-Each row may carry up to twelve keys. **Only non-empty values are included** —
+Each row may carry up to thirteen keys. **Only non-empty values are included** —
 `to_dict()` drops any field that is `None` or `""`, so the set of keys present
-varies from row to row.
+varies from row to row. The results CSV header is fixed
+(`core.update_result.CSV_COLUMNS`, all thirteen columns in the order below)
+so every project's file has the same columns; absent keys are empty cells.
 
 | Key | Source field | Notes |
 |-----|--------------|-------|
@@ -32,6 +34,7 @@ varies from row to row.
 | `VT_RESULT` | `vt_result` | VT configuration outcome |
 | `CB_NAME` | `cb_name` | Circuit breaker name (Energex unmatched-CB rows) |
 | `ERROR_DETAIL` | `error_detail` | Exception text on `Script Failed` rows |
+| `SETTING_ID` | `setting_id` | IPS relay setting ID the row came from (added 2026-10) |
 
 ## Reading success
 
@@ -59,6 +62,11 @@ To detect success in post-run analysis, treat a row as successful when it has a
 | `Script Failed` | `_handle_device_error` | Unhandled exception during processing; device set OOS; `ERROR_DETAIL` populated | Script error |
 | `Not a protection device` | `ee_settings` (Ergon only) | `get_plant_number()` could not parse a plant number from the name | Informational |
 | `FAILED FUSE` | `ee_settings` (Ergon only) | Fuse pre-processing failed before reaching `fuse_setting` | Script error / data |
+| `No CT - set out of service` | `ct_settings` | IPS links no CT and the relay has none in the model; relay set OOS (without a CT PF reads secondary amps as primary) | Data |
+| `Reclose logic unresolved - left unchanged` | `relay_reclosing` | The computed RelRecl table would disable every block on every trip; neither `ilogic` nor `oplockout` written | Mapping accuracy |
+| `Solid link - fuse set out of service` | `fuse_setting` | IPS describes a solid link; RelFuse set OOS | Informational |
+| `IPS fuse setting incomplete` | `fuse_setting` | The fuse's IPS rows are malformed (previously reported as `Not in IPS`) | Data |
+| `Deleted - duplicate name ending ')'` | `ee_settings` (Ergon only) | PF duplicate-name suffix; device deleted (previously silent) | Informational |
 
 ### CT and VT sub-results
 
@@ -67,11 +75,12 @@ relays.
 
 | Field | Values |
 |-------|--------|
-| `CT_RESULT` | `CT info updated`, `Recloser CT was updated`, `No CT Linked` |
-| `VT_RESULT` | `VT info updated`, `No VT Linked` |
+| `CT_RESULT` | `CT info updated`, `Recloser CT was updated`, `No CT in IPS - model CT kept`, `No CT in IPS or model`, `No CT slot on relay type`, `No relay type` |
+| `VT_RESULT` | `VT info updated`, `No VT Linked`, `No VT slot on relay type`, `No relay type` |
 
-`No CT Linked` / `No VT Linked` mean IPS had no CT/VT (primary turns == 1) and
-are informational, not errors.
+`No CT Linked` was replaced (2026-10) by the two `No CT in IPS ...` values:
+the CT slot is no longer cleared. `No VT Linked` means IPS had no VT
+(secondary == 1) and is informational.
 
 ## Region differences (Ergon vs Energex)
 

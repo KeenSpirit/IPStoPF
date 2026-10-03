@@ -11,6 +11,7 @@ Performance optimizations:
 - Uses FuseTypeIndex for O(1) fuse type lookups
 """
 
+import re
 from typing import Dict, List, Optional, Any, Union, Tuple
 
 from update_powerfactory.type_index import FuseTypeIndex
@@ -58,8 +59,12 @@ def fuse_setting(
             device_object.settings
         )
         if extraction_failed:
-            result.result = "Not in IPS"
+            # The setting IS in IPS; its rows are malformed. "Not in IPS"
+            # here hid the difference.
+            result.result = "IPS fuse setting incomplete"
             return result
+        if is_solid_link(curve_type, device_object.settings):
+            return _apply_solid_link(device_object, result)
 
     # Find matching fuse type
     fuse = _find_matching_fuse(
@@ -118,15 +123,50 @@ def _extract_fuse_parameters(
         elif setting[1] == "MAX" and "Dual Rated" in setting_value:
             rating = f" {setting_value}/"
         elif setting[1] in ["MAX", "In"]:
-            # Extract numeric portion of rating
-            rate_set = ""
-            for char in setting_value:
-                if char in [".", ","]:
-                    break
-                rate_set += char
-            rating = f" {rate_set}A"
+            # Whole-amp part of the rating ("63", "63A", "63.0" -> " 63A").
+            # Non-numeric ratings ('SOLID LINK') give no rating rather than
+            # the old ' SOLID LINKA'.
+            match = _RATING_DIGITS.match(str(setting_value))
+            rating = f" {match.group(1)}A" if match else ""
 
     return curve_type, rating, False
+
+
+_RATING_DIGITS = re.compile(r"\s*(\d+)")
+
+SOLID_LINK_RESULT = "Solid link - fuse set out of service"
+
+
+def is_solid_link(curve_type: str, settings: List[List]) -> bool:
+    """IPS describes the device as a solid link (no fuse element)."""
+    if "SOLID" in str(curve_type).upper():
+        return True
+    return any(
+        len(row) >= 3 and row[1] in ("MAX", "In")
+        and "SOLID" in str(row[2]).upper()
+        for row in settings
+    )
+
+
+def _apply_solid_link(device_object: Any, result: UpdateResult) -> UpdateResult:
+    """
+    A solid link has no protective function: take the RelFuse out of service.
+
+    Before this, 'SOLID LINK' was parsed as rating ' SOLID LINKA', matched no
+    TypFuse, was reported 'Type Matching Error' and left IN service with
+    whatever fuse type it already had, so SPA graded a fuse that does not
+    exist (11 such devices in Gladstone and South Burnett on 2026-10-03,
+    e.g. DO-1718168, DO-502412). Out of service, the cubicle still conducts.
+    """
+    pf_device = device_object.pf_obj
+    pf_device.SetAttribute("e:chr_name", str(device_object.date))
+    pf_device.SetAttribute("e:outserv", 1)
+    result.date_setting = device_object.date
+    result.relay_pattern = device_object.device
+    result.used_pattern = device_object.device
+    result.result = SOLID_LINK_RESULT
+    logger.info(f"{pf_device.loc_name}: solid link in IPS; fuse set out of service")
+    return result
 
 
 def _find_matching_fuse(

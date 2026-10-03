@@ -71,16 +71,18 @@ def get_ips_settings(
         f"{len(set_ids)} setting IDs"
     )
 
-    # Load detailed settings for all devices
+    # Load detailed settings for all devices. Always the bulk ODS fetch:
+    # interactive selections used to load per device through NetDash,
+    # which is decommissioned, so that mode could only time out.
     ips_settings, ips_it_settings = qd.batch_settings(
-        app, region, batch, set_ids
+        app, region, True, set_ids
     )
     logger.info("Settings fetch complete; associating settings with devices")
 
     # Associate settings with each device
     _associate_device_settings(
         app, device_list, ips_settings, ips_it_settings,
-        region, batch
+        region, True
     )
     logger.info("Settings association complete; handing off to update_pf")
 
@@ -124,7 +126,7 @@ def _get_selected_devices(
     if batch or set_ids == "Batch":
         # Batch mode - process all devices
         if region == "Energex":
-            app.PrintPlain("Creating a list of Setting IDs for all Energex devices")
+            logger.info("Creating a list of Setting IDs for all Energex devices")
             device_list, failed_cbs, set_ids = ex.create_new_devices(
                 app, setting_index, batch
             )
@@ -142,7 +144,7 @@ def _get_selected_devices(
                     app, network_level=ars.NETWORK_DISTRIBUTION
                 )
             # app.ClearOutputWindow()
-            app.PrintPlain("Creating a list of Setting IDs for all Ergon devices")
+            logger.info("Creating a list of Setting IDs for all Ergon devices")
             set_ids, device_list, data_capture_list = ee.ergon_all_dev_list(
                 app, data_capture_list, setting_index, batch
             )
@@ -221,11 +223,16 @@ def _associate_device_settings(
     """
     total = len(device_list)
 
+    # IT rows by setting ID, built once. Each device used to scan the
+    # whole matched IT list (devices x rows).
+    it_by_setting: Dict[str, List] = {}
+    for row in ips_it_settings or []:
+        it_by_setting.setdefault(getattr(row, "relaysettingid", None), []).append(row)
+
     for i, device_object in enumerate(device_list):
-        if i % 10 == 0:
-            app.PrintPlain(
-                f"Device {i} of {total} has had its setting attributes assigned"
-            )
+        if i % 500 == 0:
+            # logger, not app.PrintPlain: PrintPlain is invisible headless.
+            logger.info(f"Associating settings: device {i} of {total}")
 
         if not device_object.device:
             continue
@@ -236,8 +243,9 @@ def _associate_device_settings(
             device_object.associated_settings(ips_settings)
 
         # Load CT/VT settings
-        if ips_it_settings:
+        rows = it_by_setting.get(device_object.setting_id, [])
+        if rows:
             if region == "Energex":
-                device_object.seq_instrument_attributes(ips_it_settings)
+                device_object.seq_instrument_attributes(rows)
             else:
-                device_object.reg_instrument_attributes(ips_it_settings)
+                device_object.reg_instrument_attributes(rows)

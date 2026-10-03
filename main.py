@@ -128,6 +128,7 @@ from ips_data import query_database as qd
 from ips_data import ips_settings
 from update_powerfactory import orchestrator
 from core import UpdateResult
+from core.update_result import CSV_COLUMNS
 
 from importlib import reload
 
@@ -182,9 +183,11 @@ def main(app=None, batch=True):
                     app.PrintError(f"  {error}")
                 logger.error(f"Configuration validation failed: {result.errors}")
                 return None
-            # Print warnings but continue
+            # Print warnings but continue. PrintWarn is invisible in
+            # headless runs, so they are logged as well.
             for warning in result.warnings:
                 app.PrintWarn(warning)
+                logger.warning(f"Configuration: {warning}")
         else:
             # Interactive mode: standard validation, faster startup
             # require_valid_config() will exit automatically if invalid
@@ -264,7 +267,9 @@ def main(app=None, batch=True):
         save_file = create_save_file(app, prjt, called_function)
         if not save_file:
             return
-        write_dict_list_to_csv(data_capture_list, save_file)
+        write_dict_list_to_csv(
+            data_capture_list, save_file, fieldnames=CSV_COLUMNS
+        )
 
         # Restore the echo so the outcome messages below are visible.
         echo(app, off=False)
@@ -420,7 +425,8 @@ def summarise_results(data_capture_list) -> dict:
             result = info["RESULT"]
         except (KeyError, TypeError):
             result = None
-        counts[result or "(no result recorded)"] += 1
+        # A blank RESULT is the success path (DATA_CAPTURE_LIST.md).
+        counts[result or "Updated (blank RESULT)"] += 1
     return dict(counts.most_common())
 
 

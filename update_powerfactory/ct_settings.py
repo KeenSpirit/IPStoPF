@@ -10,7 +10,7 @@ It includes:
 - Measurement element configuration
 """
 
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 from utils.pf_utils import all_relevant_objects
 from core import UpdateResult
@@ -74,6 +74,14 @@ def update_ct(
     # At this point the script needs to update the appropriate primary and
     # secondary turns. This means that the type needs to contain the appropriate
     # attributes.
+    if device_object.pf_obj.typ_id is None:
+        # check_relay_type could not assign a type (already recorded and
+        # set out of service there). Without a type there are no slots, and
+        # the attribute chain below raised, turning the result into
+        # "Script Failed".
+        result.ct_result = "No relay type"
+        return result
+
     if ct_library is None:
         ct_library = get_ct_library(app)
 
@@ -103,16 +111,16 @@ def update_ct(
     # Check to see if the relay has a type and if it has available CT ratios
     primary = int(float(device_object.ct_primary))
     if primary == 1:
-        # This indicates that there was not a CT linked in IPS
-        # The following code clears the CT slot
-        slot_objs = device_object.pf_obj.GetAttribute("pdiselm")
-        for i, item in enumerate(device_object.pf_obj.GetAttribute("r:typ_id:e:pblk")):
-            if item and is_ct_slot(item.GetAttribute("filtmod")):
-                slot_objs[i] = None
-                break
-        device_object.pf_obj.SetAttribute("pdiselm", slot_objs)
-        result.ct_result = "No CT Linked"
-        return result
+        # No CT linked in IPS. This branch used to CLEAR the CT slot, which
+        # leaves the relay reading secondary amps as primary: SPA then saw
+        # 1-2 A primary pickups on 14 Gladstone feeder relays (2026-10-03,
+        # e.g. FILASS-FB51-J01-S101-3OC-A-A, CLINSS-FB10-J01-J11) and graded
+        # and damage-checked against them. Missing data must not become
+        # plausible-looking wrong data, so:
+        #   - a CT already in the slot is kept (the best data available);
+        #   - with no CT anywhere the relay is set out of service and the
+        #     result says why.
+        return _handle_no_ips_ct(device_object, result)
 
     secondary = int(float(device_object.ct_secondary))
     current_trans = update_ct_slots(app, device_object)
@@ -138,14 +146,76 @@ def update_ct(
     current_trans.SetAttribute("e:ptapset", primary)
     current_trans.SetAttribute("e:stapset", secondary)
 
-    if device_object.ct_op_id:
-        current_trans.SetAttribute("e:sernum", device_object.ct_datesetting)
+    ct_date = getattr(device_object, "ct_datesetting", None)
+    if device_object.ct_op_id and ct_date:
+        current_trans.SetAttribute("e:sernum", ct_date)
 
     result.set_ct_info(device_object.ct_op_id, "CT info updated")
 
     # Check that measuring devices have matching CT secondary
     check_update_measurement_elements(app, device_object.pf_obj, secondary)
 
+    return result
+
+
+REMOTE_CT_SLOT_NAMES = ("Ct-3P(remote)", "Winding 2 Ct")
+
+
+def _model_ct(pf_device: Any) -> Tuple[bool, Optional[Any]]:
+    """
+    (relay type has a local CT slot, StaCt currently in the first such slot).
+
+    Remote CT slots are ignored: update_ct_slots clears them because
+    PowerFactory populates them itself.
+    """
+    try:
+        blocks = pf_device.GetAttribute("typ_id").GetAttribute("pblk")
+        slot_objs = pf_device.GetAttribute("pdiselm")
+    except AttributeError:
+        return False, None
+    has_slot = False
+    for i, item in enumerate(blocks or []):
+        if not item or not is_ct_slot(item.GetAttribute("filtmod")):
+            continue
+        if item.loc_name in REMOTE_CT_SLOT_NAMES:
+            continue
+        has_slot = True
+        obj = slot_objs[i] if slot_objs and i < len(slot_objs) else None
+        if obj is not None:
+            return True, obj
+    return has_slot, None
+
+
+def _handle_no_ips_ct(device_object: Any, result: UpdateResult) -> UpdateResult:
+    """IPS links no CT to this relay: keep the model's CT, or take it OOS."""
+    pf_device = device_object.pf_obj
+    name = pf_device.loc_name
+    has_slot, ct_obj = _model_ct(pf_device)
+
+    if ct_obj is not None:
+        try:
+            taps = f"{ct_obj.GetAttribute('e:ptapset'):g}/{ct_obj.GetAttribute('e:stapset'):g}"
+        except (AttributeError, TypeError, ValueError):
+            taps = "taps unreadable"
+        logger.warning(
+            f"{name}: no CT linked in IPS; kept the CT already in the model "
+            f"({ct_obj.loc_name}, {taps})"
+        )
+        result.set_ct_info(ct_obj.loc_name, "No CT in IPS - model CT kept")
+        return result
+
+    if not has_slot:
+        result.ct_result = "No CT slot on relay type"
+        return result
+
+    pf_device.SetAttribute("outserv", 1)
+    logger.warning(
+        f"{name}: no CT linked in IPS and no CT in the model; relay set out "
+        f"of service (without a CT it would read secondary amps as primary)"
+    )
+    result.ct_result = "No CT in IPS or model"
+    if not result.result:
+        result.result = "No CT - set out of service"
     return result
 
 
@@ -211,7 +281,7 @@ def update_ct_slots(app, device_object: Any) -> Any:
     pf_device = device_object.pf_obj
     cubical = pf_device.fold_id
     slot_objs = pf_device.GetAttribute("pdiselm")
-    remote_ct_slot_names = ["Ct-3P(remote)", "Winding 2 Ct"]
+    remote_ct_slot_names = REMOTE_CT_SLOT_NAMES
 
     if not device_object.ct_op_id:
         ct_name = "{}_CT".format(pf_device.loc_name)

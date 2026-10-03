@@ -21,7 +21,7 @@ from logging_config import get_logger
 
 logger = get_logger(__name__)
 
-from utils.pf_utils import get_all_protection_devices
+from utils.pf_utils import get_all_protection_devices, get_live_relays
 
 
 def ex_device_list(
@@ -32,30 +32,30 @@ def ex_device_list(
 ) -> Tuple[List[str], List[ProtectionDevice]]:
     """
     Create device list for user-selected Energex devices.
-    
-    Converts protection device selections to their associated PowerFactory 
+
+    Converts protection device selections to their associated PowerFactory
     switches, then maps switch names to IPS relay setting IDs.
-    
+
     Args:
         app: PowerFactory application object
         selections: List of device names selected by user
         device_dict: Dictionary mapping device names to [pf_obj, class, phases, feeder, sub]
         setting_index: Indexed IPS settings for O(1) lookups
-        
+
     Returns:
         Tuple of (setting_ids, list_of_devices)
     """
     prjt = app.GetActiveProject()
     raw_switches = prjt.GetContents("*.StaSwitch", True) + prjt.GetContents("*.ElmCoup", True)
-    
+
     # Get unique switches for selected devices
     switches = _get_switches_for_selections(app, selections, device_dict, raw_switches)
-    
+
     # Convert switches to setting IDs and devices
-    cb_alt_name_list = get_cb_alt_name_list(app)
+    cb_alt_name_list = cb_alt_name_index(get_cb_alt_name_list(app))
     list_of_devices: List[ProtectionDevice] = []
     setting_ids: List[str] = []
-    
+
     for switch in switches:
         new_ids, list_of_devices = _get_setting_id_indexed(
             app=app,
@@ -66,10 +66,10 @@ def ex_device_list(
             cb_alt_name_list=cb_alt_name_list,
         )
         setting_ids.extend(new_ids)
-    
+
     # Filter to only include explicitly selected devices
     list_of_devices = _filter_to_selections(list_of_devices, selections, device_dict)
-    
+
     return setting_ids, list_of_devices
 
 
@@ -81,31 +81,31 @@ def _get_switches_for_selections(
 ) -> List:
     """
     Get unique switches associated with the selected devices.
-    
+
     Args:
         app: PowerFactory application object
         selections: List of selected device names
         device_dict: Device information dictionary
         raw_switches: All switches in the project
-        
+
     Returns:
         List of unique switch objects
     """
     switches = []
-    
+
     for i, device in enumerate(selections):
         if i % 10 == 0:
             logger.info(f"Finding switch for device {i} of {len(selections)}")
-        
+
         # Extract base device name (before underscore)
         device_name = device.split("_")[0]
-        
+
         pf_device = device_dict[device][0]
         assoc_switch = _get_assoc_switch(pf_device, raw_switches)
-        
+
         if assoc_switch and assoc_switch not in switches:
             switches.append(assoc_switch)
-    
+
     return switches
 
 
@@ -116,17 +116,17 @@ def _filter_to_selections(
 ) -> List[ProtectionDevice]:
     """
     Filter device list to only include explicitly selected devices.
-    
+
     Args:
         list_of_devices: All devices found
         selections: User's selections
         device_dict: Device information dictionary
-        
+
     Returns:
         Filtered list of devices
     """
     filtered = []
-    
+
     for device in list_of_devices:
         # Build possible name variations
         if device.device_id:
@@ -135,7 +135,7 @@ def _filter_to_selections(
         else:
             name_v1 = f"{device.name}_{device.seq_name}".rstrip()
             name_v2 = None
-        
+
         # Check if any variation is in selections
         if name_v1 in selections:
             device.pf_obj = device_dict[name_v1][0]
@@ -154,36 +154,36 @@ def create_new_devices(
 ) -> Tuple[List[ProtectionDevice], List, List[str]]:
     """
     Batch update for Energex (SEQ) models.
-    
+
     Processes all switches in the active project, finding or creating
     protection devices based on IPS data.
-    
+
     Args:
         app: PowerFactory application object
         setting_index: Indexed IPS settings for O(1) lookups
         batch: True if called from batch update
-        
+
     Returns:
         Tuple of (list_of_devices, failed_cbs, setting_ids)
     """
     prjt = app.GetActiveProject()
-    cb_alt_name_list = get_cb_alt_name_list(app)
-    
+    cb_alt_name_list = cb_alt_name_index(get_cb_alt_name_list(app))
+
     # Get all valid switches
     switches = _get_valid_switches(prjt)
-    
+
     failed_cbs: List = []
     setting_ids: List[str] = []
     list_of_devices: List[ProtectionDevice] = []
-    
+
     for i, switch in enumerate(switches):
         if i % 10 == 0:
             logger.info(f"IPS is being checked for switch {i} of {len(switches)}")
-        
+
         # Skip certain ElmCoup switches
         if not _should_process_switch(switch):
             continue
-        
+
         initial_count = len(setting_ids)
 
 
@@ -196,33 +196,33 @@ def create_new_devices(
             cb_alt_name_list=cb_alt_name_list,
         )
         setting_ids.extend(new_ids)
-        
+
         # Handle switches with no IPS data found
         if len(setting_ids) == initial_count:
             _handle_unmatched_switch(switch, failed_cbs)
-    
+
     # Create/assign PowerFactory objects for all devices
     list_of_devices = _assign_pf_objects(list_of_devices)
 
     # Debug code:
     # for device in list_of_devices:
     #     logger.info(vars(device))
-    
+
     return list_of_devices, failed_cbs, setting_ids
 
 
 def _get_valid_switches(prjt) -> List:
     """
     Get all valid switches for processing.
-    
+
     Args:
         prjt: Active PowerFactory project
-        
+
     Returns:
         List of valid switch objects
     """
     raw_switches = prjt.GetContents("*.StaSwitch", True) + prjt.GetContents("*.ElmCoup", True)
-    
+
     return [
         switch for switch in raw_switches
         if switch.GetAttribute("cpGrid")
@@ -235,10 +235,10 @@ def _get_valid_switches(prjt) -> List:
 def _should_process_switch(switch) -> bool:
     """
     Determine if a switch should be processed for protection devices.
-    
+
     Args:
         switch: The switch object to check
-        
+
     Returns:
         True if switch should be processed
     """
@@ -249,23 +249,23 @@ def _should_process_switch(switch) -> bool:
             return False
     except (ValueError, IndexError):
         pass
-    
+
     try:
         if switch.GetClassName() == "StaSwitch":
             if not switch.GetAttribute("r:fold_id:r:obj_id:e:loc_name"):
                 return False
     except AttributeError:
         return False
-    
+
     return True
 
 
 def _handle_unmatched_switch(switch, failed_cbs: List) -> None:
     """
     Handle a switch that has no matching IPS protection devices.
-    
+
     Deletes any existing protection devices and records the switch as failed.
-    
+
     Args:
         switch: The unmatched switch
         failed_cbs: List to append failed CBs to
@@ -276,12 +276,12 @@ def _handle_unmatched_switch(switch, failed_cbs: List) -> None:
     else:
         root_cub = switch.GetCubicle(0)
         contents = root_cub.GetContents() if root_cub else []
-    
+
     # Delete existing protection devices
     for content in contents:
         if content.GetClassName() in ["ElmRelay", "RelFuse", "StaCt"]:
             content.Delete()
-    
+
     # Record CB as failed if it's a circuit breaker
     if switch.GetClassName() == "ElmCoup" and switch.GetAttribute("e:aUsage") == "cbk":
         if switch not in failed_cbs:
@@ -294,7 +294,7 @@ def _assign_pf_objects(
     ) -> List[ProtectionDevice]:
     """
     Create or assign PowerFactory objects for all devices.
-    
+
     Args:
         list_of_devices: List of devices needing PF objects
         data_capture_list: Optional list to append info records to when a
@@ -346,33 +346,33 @@ def _assign_pf_objects(
 def _get_device_name(device: ProtectionDevice, used_names: Set[str]) -> str:
     """
     Generate the PowerFactory device name.
-    
+
     Args:
         device: The protection device
         used_names: Set of already-used names
-        
+
     Returns:
         The device name to use
     """
     if not device.device_id:
         return f"{device.name}_{device.seq_name}".rstrip()
-    
+
     base_name = f"{device.name}_{device.device_id}".rstrip()
-    
+
     if base_name in used_names:
         return f"{device.name}_{device.device_id}_{device.seq_name}".rstrip()
-    
+
     return base_name
 
 
 def _find_or_create_pf_device(switch, device_name: str):
     """
     Find existing or create new PowerFactory protection device.
-    
+
     Args:
         switch: The associated switch object
         device_name: Name for the device
-        
+
     Returns:
         The PowerFactory device object
     """
@@ -380,10 +380,10 @@ def _find_or_create_pf_device(switch, device_name: str):
         cubicle = switch.fold_id
     else:
         cubicle = switch.GetCubicle(0)
-    
+
     if not cubicle:
         return None
-    
+
     # Check for existing device
     contents = cubicle.GetContents(f"{device_name}.ElmRelay")
     contents += cubicle.GetContents(f"{device_name}.RelFuse")
@@ -402,11 +402,11 @@ def _find_or_create_pf_device(switch, device_name: str):
 def _get_assoc_switch(pf_device, raw_switches: List):
     """
     Find the switch associated with a protection device.
-    
+
     Args:
         pf_device: The PowerFactory protection device
         raw_switches: List of all switches
-        
+
     Returns:
         The associated switch object or None
     """
@@ -427,7 +427,7 @@ def _get_assoc_switch(pf_device, raw_switches: List):
                                 return switch
         except AttributeError:
             pass
-    
+
     return None
 
 
@@ -441,17 +441,17 @@ def _get_setting_id_indexed(
 ) -> Tuple[List[str], List[ProtectionDevice]]:
     """
     Find setting IDs for a switch using indexed lookup.
-    
+
     The index handles double cable box expansion (e.g., "NIP1A+B" is indexed
     under both "NIP1A" and "NIP1B"), so a simple lookup by switch_name will
     return all matching records including those from combined devices.
-    
+
     Note: Devices with identical attributes but different switches are allowed
     by design. The same setting record may create multiple device objects if
     it protects multiple switches (e.g., "NIP1A+B" creates devices for both
     switch "NIP1A" and switch "NIP1B"). This is handled later in the
     update_powerfactory portion of the script.
-    
+
     Args:
         app: PowerFactory application object
         switch: The switch to find settings for
@@ -459,18 +459,18 @@ def _get_setting_id_indexed(
         setting_index: Indexed IPS settings
         batch: True if batch update
         cb_alt_name_list: CB name mapping list
-        
+
     Returns:
         Tuple of (new_setting_ids, updated list_of_devices)
     """
     setting_ids: List[str] = []
-    
+
     # Get switch name (potentially mapped)
     switch_name, sub_code = _get_switch_info(switch, cb_alt_name_list)
-    
+
     if len(switch_name) < 4:
         return setting_ids, list_of_devices
-    
+
     # Look up matching records (O(1) lookup)
     # The index already handles "A+B" expansion, so "NIP1A+B" is indexed under
     # both "NIP1A" and "NIP1B"
@@ -484,13 +484,13 @@ def _get_setting_id_indexed(
         device = _create_device_from_record(
             app, record, switch, batch
         )
-        
+
         if device:
             # Add to list - duplicates with different switches are allowed by design
             # Each setting ID that matches a switch creates a device object
             list_of_devices.append(device)
             setting_ids.append(record.relaysettingid)
-    
+
     return setting_ids, list_of_devices
 
 
@@ -505,25 +505,38 @@ def _get_switch_info(switch, cb_alt_name_list: List[Dict]) -> Tuple[str, Optiona
     Returns:
         Tuple of (switch_name, substation_code)
     """
-    # Check for name mapping
-    for cb_dict in cb_alt_name_list:
-        if (cb_dict["SUBSTATION"] == switch.fold_id.loc_name and
-                cb_dict["CB_NAME"] == switch.loc_name):
-            pf_switch_name = cb_dict["NEW_NAME"]
-            break
+    # Read the two names ONCE. The old loop read switch.fold_id.loc_name
+    # and switch.loc_name for every CB_ALT_NAME row - two PowerFactory
+    # calls per row per switch - which made the Energex switch loop take
+    # 7.4-8.0 min per project on 2026-10-03.
+    sub_name = switch.fold_id.loc_name
+    cb_name = switch.loc_name
+
+    if isinstance(cb_alt_name_list, dict):
+        new_name = cb_alt_name_list.get((sub_name, cb_name))
     else:
-        pf_switch_name = switch.loc_name
+        new_name = next(
+            (d["NEW_NAME"] for d in cb_alt_name_list
+             if d["SUBSTATION"] == sub_name and d["CB_NAME"] == cb_name),
+            None,
+        )
+    pf_switch_name = new_name if new_name is not None else cb_name
 
     # Extract base name (before underscore)
     switch_name = pf_switch_name.split("_")[0]
 
     # Get substation code for ElmCoup switches
-    if switch.GetClassName() == "ElmCoup":
-        sub_code = switch.fold_id.loc_name
-    else:
-        sub_code = None
+    sub_code = sub_name if switch.GetClassName() == "ElmCoup" else None
 
     return switch_name, sub_code
+
+
+def cb_alt_name_index(cb_alt_name_list: List[Dict]) -> Dict[Tuple[str, str], str]:
+    """{(SUBSTATION, CB_NAME): NEW_NAME}; the first row wins, as the loop did."""
+    index: Dict[Tuple[str, str], str] = {}
+    for row in cb_alt_name_list:
+        index.setdefault((row.get("SUBSTATION"), row.get("CB_NAME")), row.get("NEW_NAME"))
+    return index
 
 
 def _create_device_from_record(
@@ -534,13 +547,13 @@ def _create_device_from_record(
 ) -> Optional[ProtectionDevice]:
     """
     Create a ProtectionDevice from a SettingRecord.
-    
+
     Args:
         app: PowerFactory application object
         record: The IPS setting record
         switch: The associated switch
         called_function: True if batch update
-        
+
     Returns:
         ProtectionDevice object or None
     """
@@ -549,7 +562,7 @@ def _create_device_from_record(
     if device_id:
         for char in ": /,":
             device_id = device_id.replace(char, "")
-    
+
     prot_dev = ProtectionDevice(
         app,
         record.patternname,
@@ -561,16 +574,16 @@ def _create_device_from_record(
     )
     prot_dev.switch = switch
     prot_dev.seq_name = record.assetname
-    
-    # Load settings if not batch
-    if not called_function:
-        ips_settings = qd.seq_get_ips_settings(app, record.relaysettingid)
-        prot_dev.associated_settings(ips_settings)
-    
+
+    # Settings are no longer fetched here one device at a time: that path
+    # went through NetDash, which is decommissioned. get_ips_settings bulk-
+    # loads every device's settings from the ODS after enumeration, in
+    # interactive and batch runs alike.
+
     # Mark fuses
     if prot_dev.device and "fuse" in prot_dev.device.lower():
         prot_dev.fuse_type = "Line Fuse"
-    
+
     return prot_dev
 
 
@@ -597,12 +610,14 @@ def reconcile_orphan_relays(
     get_all_protection_devices() already restricts to energised, in-service,
     calculation-relevant devices, so anything returned here can reach ComShc.
     """
-    matched = [d.pf_obj for d in list_of_devices if d.pf_obj]
-    live_devices, _ = get_all_protection_devices(app)
+    # A set: membership was a list scan of PF objects per live relay.
+    matched = {d.pf_obj for d in list_of_devices if d.pf_obj}
+    # Relays only. get_all_protection_devices also scanned every fuse and
+    # classified every device by feeder (feeder.GetAll() per feeder), all
+    # discarded here.
+    live_devices = get_live_relays(app)
 
     for pf_device in live_devices:
-        if pf_device.GetClassName() != "ElmRelay":
-            continue
         if pf_device in matched:
             continue
 

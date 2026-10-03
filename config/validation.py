@@ -782,6 +782,10 @@ def get_strict_config() -> ValidationConfig:
 # Validation for Specific Contexts
 # =============================================================================
 
+# A passing batch validation, reused for the rest of the process.
+_batch_validation: Optional[ValidationResult] = None
+
+
 def validate_for_batch_mode(app) -> ValidationResult:
     """
     Validate configuration for batch update mode.
@@ -789,19 +793,37 @@ def validate_for_batch_mode(app) -> ValidationResult:
     Batch mode has stricter requirements since it will process
     many devices unattended.
 
+    Two changes for fleet runs (2026-10-03 review):
+
+    * No database check. check_database only ever tested NetDash, which
+      is decommissioned: every project spent ~70 s on it (the gap between
+      'netdashreader is no longer supported' and 'Determined region' in
+      the run log) and it could only ever add a warning. The real
+      connectivity check is the ODS connection opened by the settings
+      fetch, which fails the project loudly in batch.
+    * A passing result is cached for the process. Paths, mapping files
+      and library imports do not change between projects of one run.
+
     Args:
         app: PowerFactory application object
 
     Returns:
         ValidationResult
     """
+    global _batch_validation
+    if _batch_validation is not None:
+        return _batch_validation
+
     config = ValidationConfig(
         level=ValidationLevel.FULL,
-        check_database=True,  # Must have database access for batch
+        check_database=False,
         treat_warnings_as_errors=False,
-        timeout_seconds=30,  # Longer timeout for batch
+        timeout_seconds=30,
     )
-    return validate_startup(app, config)
+    result = validate_startup(app, config)
+    if result.is_valid:
+        _batch_validation = result
+    return result
 
 
 def validate_for_interactive_mode(app) -> ValidationResult:
