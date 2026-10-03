@@ -52,7 +52,7 @@ def ex_device_list(
     switches = _get_switches_for_selections(app, selections, device_dict, raw_switches)
     
     # Convert switches to setting IDs and devices
-    cb_alt_name_list = get_cb_alt_name_list(app)
+    cb_alt_name_list = cb_alt_name_index(get_cb_alt_name_list(app))
     list_of_devices: List[ProtectionDevice] = []
     setting_ids: List[str] = []
     
@@ -167,8 +167,8 @@ def create_new_devices(
         Tuple of (list_of_devices, failed_cbs, setting_ids)
     """
     prjt = app.GetActiveProject()
-    cb_alt_name_list = get_cb_alt_name_list(app)
-    
+    cb_alt_name_list = cb_alt_name_index(get_cb_alt_name_list(app))
+
     # Get all valid switches
     switches = _get_valid_switches(prjt)
     
@@ -505,25 +505,38 @@ def _get_switch_info(switch, cb_alt_name_list: List[Dict]) -> Tuple[str, Optiona
     Returns:
         Tuple of (switch_name, substation_code)
     """
-    # Check for name mapping
-    for cb_dict in cb_alt_name_list:
-        if (cb_dict["SUBSTATION"] == switch.fold_id.loc_name and
-                cb_dict["CB_NAME"] == switch.loc_name):
-            pf_switch_name = cb_dict["NEW_NAME"]
-            break
+    # Read the two names ONCE. The old loop read switch.fold_id.loc_name
+    # and switch.loc_name for every CB_ALT_NAME row - two PowerFactory
+    # calls per row per switch - which made the Energex switch loop take
+    # 7.4-8.0 min per project on 2026-10-03.
+    sub_name = switch.fold_id.loc_name
+    cb_name = switch.loc_name
+
+    if isinstance(cb_alt_name_list, dict):
+        new_name = cb_alt_name_list.get((sub_name, cb_name))
     else:
-        pf_switch_name = switch.loc_name
+        new_name = next(
+            (d["NEW_NAME"] for d in cb_alt_name_list
+             if d["SUBSTATION"] == sub_name and d["CB_NAME"] == cb_name),
+            None,
+        )
+    pf_switch_name = new_name if new_name is not None else cb_name
 
     # Extract base name (before underscore)
     switch_name = pf_switch_name.split("_")[0]
 
     # Get substation code for ElmCoup switches
-    if switch.GetClassName() == "ElmCoup":
-        sub_code = switch.fold_id.loc_name
-    else:
-        sub_code = None
+    sub_code = sub_name if switch.GetClassName() == "ElmCoup" else None
 
     return switch_name, sub_code
+
+
+def cb_alt_name_index(cb_alt_name_list: List[Dict]) -> Dict[Tuple[str, str], str]:
+    """{(SUBSTATION, CB_NAME): NEW_NAME}; the first row wins, as the loop did."""
+    index: Dict[Tuple[str, str], str] = {}
+    for row in cb_alt_name_list:
+        index.setdefault((row.get("SUBSTATION"), row.get("CB_NAME")), row.get("NEW_NAME"))
+    return index
 
 
 def _create_device_from_record(
