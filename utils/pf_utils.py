@@ -300,8 +300,6 @@ def get_fuse_types(app: Any) -> List[Any]:
 def determine_fuse_role(app, fuse):
     """This function will observe the fuse location and determine if it is
     a Distribution transformer fuse, SWER isolating fuse or a line fuse"""
-    # Create the fuse dictionary for sizes based on transformer data
-    size_dict = create_fuse_dict()
     # First check is that if the fuse exists in a terminal that is in the
     # System Overiew then it will be a line fuse.
     fuse_active = fuse.HasAttribute("r:fold_id:r:obj_id:e:loc_name")
@@ -318,175 +316,218 @@ def determine_fuse_role(app, fuse):
         # This indicates that the duse is not ina scitch object
         return ["Line Fuse", None]
     secondary_sub = fuse.fold_id.cterm.fold_id
-    contents = secondary_sub.GetContents()
-    for content in contents:
-        if content.GetClassName() == "ElmTr2":
-            break
-    else:
+    # Server-side class filter: one call instead of fetching every object in
+    # the substation and calling GetClassName on each.
+    transformers = secondary_sub.GetContents("*.ElmTr2")
+    if not transformers:
         return ["Line Fuse", None]
+    content = transformers[0]
     try:
-        # Determine the type of transformer
         tx_type = content.typ_id
-        tx_constr = tx_type.GetAttribute("e:nt2ph")
-        if tx_constr == 3:
-            # Three winding transformers are always going to be
-            # distribution transformers
-            hv_term_volt = int(tx_type.GetAttribute("e:utrn_h"))
-            tx_rating = int(round(tx_type.GetAttribute("e:strn"), 4) * 1000)
-            key = "{}{}{}".format(tx_constr, hv_term_volt, tx_rating)
-            try:
-                fuse_size = size_dict[key]
-            except KeyError:
-                # Set the fuse to the smallest available fuse.
-                fuse_size = "3/10K"
-            return ["Tx Fuse", fuse_size]
-        if (
-            tx_constr == 2
-            and secondary_sub.GetAttribute("e:sType").lower() == "swer isolator"
-        ):
-            # These are SWER Isolator transformers
-            term1_volt = int(tx_type.GetAttribute("e:utrn_h"))
-            term2_volt = int(tx_type.GetAttribute("e:utrn_l"))
-            tx_rating = int(float(tx_type.GetAttribute("e:strn")) * 1000)
-            try:
-                key = "{}{}{}".format(term1_volt, term2_volt, tx_rating)
-                fuse_size = size_dict[key]
-            except KeyError:
-                key = "{}{}{}".format(term2_volt, term1_volt, tx_rating)
-                try:
-                    fuse_size = size_dict[key]
-                except KeyError:
-                    # Set the fuse to the smallest available fuse.
-                    fuse_size = "3/10K"
-            return ["Tx Fuse", fuse_size]
-        elif tx_constr == 2 and content.bushv.cterm.GetAttribute("e:phtech") == 6:
-            tx_constr = 1
-            hv_term_volt = str(tx_type.GetAttribute("e:utrn_h"))[:4]
-            tx_rating = int(float(tx_type.GetAttribute("e:strn")) * 1000)
-            key = "{}{}{}".format(tx_constr, hv_term_volt, tx_rating)
-            try:
-                fuse_size = size_dict[key]
-            except KeyError:
-                # Set the fuse to the smallest available fuse.
-                fuse_size = "3/10K"
-            return ["Tx Fuse", fuse_size]
-        else:
-            hv_term_volt = int(tx_type.GetAttribute("e:utrn_h"))
-            tx_rating = int(round(tx_type.GetAttribute("e:strn"), 4) * 1000)
-            key = "{}{}{}".format(tx_constr, hv_term_volt, tx_rating)
-            try:
-                fuse_size = size_dict[key]
-            except KeyError:
-                # Set the fuse to the smallest available fuse.
-                fuse_size = "3/10K"
-            return ["Tx Fuse", fuse_size]
-    except (AttributeError, ValueError, TypeError):
-        fuse_size = "3/10K"
-        return ["Tx Fuse", fuse_size]
+        nt2ph, utrn_h, utrn_l, strn = _tx_type_data(tx_type)
+        swer_isolator = (
+            nt2ph == 2
+            and str(secondary_sub.GetAttribute("e:sType")).lower() == "swer isolator"
+        )
+        single_phase_bus = (
+            nt2ph == 2 and not swer_isolator
+            and content.bushv.cterm.GetAttribute("e:phtech") == 6
+        )
+        size, keys, defaulted = tx_fuse_size(
+            nt2ph, utrn_h, utrn_l, strn, swer_isolator, single_phase_bus
+        )
+    except (AttributeError, ValueError, TypeError) as exc:
+        logger.warning(
+            f"{fuse.loc_name}: transformer data unreadable ({exc}); Tx fuse "
+            f"defaulted to {DEFAULT_TX_FUSE}"
+        )
+        return ["Tx Fuse", DEFAULT_TX_FUSE]
+    if defaulted:
+        _warn_default_tx_fuse(keys, getattr(tx_type, "loc_name", "?"), fuse.loc_name)
+    return ["Tx Fuse", size]
+
+
+DEFAULT_TX_FUSE = "3/10K"
+
+# Transformer type data, read once per TypTr2 per process. Fleet models
+# reuse a few dozen types across thousands of fuses.
+_TX_TYPE_CACHE: Dict[Any, Tuple[Any, float, float, float]] = {}
+
+# Lookup keys already reported as missing from the STNW1001 table.
+_DEFAULT_KEYS_REPORTED: set = set()
+
+
+def _tx_type_data(tx_type: Any) -> Tuple[Any, float, float, float]:
+    cached = _TX_TYPE_CACHE.get(tx_type)
+    if cached is None:
+        cached = (
+            tx_type.GetAttribute("e:nt2ph"),
+            float(tx_type.GetAttribute("e:utrn_h")),
+            float(tx_type.GetAttribute("e:utrn_l")),
+            float(tx_type.GetAttribute("e:strn")),
+        )
+        _TX_TYPE_CACHE[tx_type] = cached
+    return cached
+
+
+def _kv(value: float) -> str:
+    """Voltage as the STNW1001 table writes it: '11', '22', '12.7', '19.1'."""
+    value = float(value)
+    if abs(value - round(value)) < 1e-6:
+        return str(int(round(value)))
+    return f"{round(value + 1e-9, 1):g}"
+
+
+def tx_fuse_size(
+    nt2ph: Any,
+    utrn_h: float,
+    utrn_l: float,
+    strn: float,
+    swer_isolator: bool,
+    single_phase_bus: bool,
+) -> Tuple[str, List[str], bool]:
+    """
+    (fuse size, keys tried, True if the table had no entry and the default was used).
+
+    Keys are '<phases><kV><kVA>' or, for SWER isolators, '<kV1><kV2><kVA>'.
+    The old code built them with int(kV) (or str(kV)[:4]), so 12.7 kV became
+    '12' and 11.0 kV became '11.0' and the table's '2212.725', '1112.725',
+    '112.75', '1115' ... entries were never matched: every SWER isolator and
+    single-phase transformer fell back to 3/10K without a word.
+    """
+    size_dict = _FUSE_SIZE_TABLE
+    if nt2ph == 3:
+        keys = [f"3{_kv(utrn_h)}{int(round(strn, 4) * 1000)}"]
+    elif swer_isolator:
+        rating = int(float(strn) * 1000)
+        keys = [f"{_kv(utrn_h)}{_kv(utrn_l)}{rating}",
+                f"{_kv(utrn_l)}{_kv(utrn_h)}{rating}"]
+    elif single_phase_bus:
+        keys = [f"1{_kv(utrn_h)}{int(float(strn) * 1000)}"]
+    else:
+        keys = [f"{nt2ph}{_kv(utrn_h)}{int(round(strn, 4) * 1000)}"]
+    for key in keys:
+        if key in size_dict:
+            return size_dict[key], keys, False
+    return DEFAULT_TX_FUSE, keys, True
+
+
+def _warn_default_tx_fuse(keys: List[str], type_name: str, fuse_name: str) -> None:
+    key = keys[0]
+    if key in _DEFAULT_KEYS_REPORTED:
+        return
+    _DEFAULT_KEYS_REPORTED.add(key)
+    logger.warning(
+        f"Tx fuse: no STNW1001 size for transformer type '{type_name}' "
+        f"(key {' / '.join(keys)}, first seen on {fuse_name}); "
+        f"{DEFAULT_TX_FUSE} used. Reported once per key."
+    )
 
 
 def create_fuse_dict():
     """This has been developed based on STNW1001. The key will be
     pf attribute for transfomer type, Voltage level, rating"""
-    fuse_dict = {
-        "21110": "3/10K",
-        "21115": "3/10K",
-        "21125": "6/20K",
-        "21150": "16K",
-        "31115": "3/10K",
-        "31125": "3/10K",
-        "31150": "6/20K",
-        "31163": "6/20K",
-        "31175": "12K",
-        "311100": "16K",
-        "311150": "20K",
-        "311200": "25K",
-        "311250": "31K",
-        "311300": "31K",
-        "311315": "31K",
-        "311500": "50K",
-        "311750": "63K",
-        "3111000": "80K",
-        "3111500": "100K",
-        "22210": "3/10K",
-        "22215": "3/10K",
-        "22225": "3/10K",
-        "22250": "6/20K",
-        "32215": "3/10K",
-        "32225": "3/10K",
-        "32250": "3/10K",
-        "32263": "3/10K",
-        "32275": "6/20K",
-        "322100": "6/20K",
-        "322150": "12K",
-        "322200": "16K",
-        "322250": "20K",
-        "322300": "20K",
-        "322315": "20K",
-        "322500": "31K",
-        "322750": "40K",
-        "3221000": "50K",
-        "3221500": "63K",
-        "23310": "3/10K",
-        "23325": "3/10K",
-        "23350": "3/10K",
-        "33325": "3/10K",
-        "33350": "3/10K",
-        "33363": "3/10K",
-        "333100": "3/10K",
-        "333200": "12K",
-        "333300": "16K",
-        "333315": "16K",
-        "333500": "20K",
-        "111125": "12K",
-        "111150": "16K",
-        "1111100": "25K",
-        "1111150": "31K",
-        "1111200": "40K",
-        "1112.725": "12K",
-        "1112.750": "16K",
-        "1112.7100": "25K",
-        "1112.7150": "31K",
-        "1112.7200": "40K",
-        "2212.725": "6/20K",
-        "2212.750": "10K",
-        "2212.7100": "20K",
-        "2212.7150": "25K",
-        "2212.7200": "31K",
-        "3312.725": "6/20K",
-        "3312.750": "6/20K",
-        "3312.7100": "16K",
-        "3312.7150": "20K",
-        "3312.7200": "25K",
-        "1119.125": "16K",
-        "1119.150": "20K",
-        "1119.1100": "31K",
-        "1119.1150": "40K",
-        "1119.1200": "50K",
-        "2219.125": "6/20K",
-        "2219.150": "6/20K",
-        "2219.1100": "20K",
-        "2219.1150": "25K",
-        "2219.1200": "31K",
-        "3319.125": "6/20K",
-        "3319.150": "6/20K",
-        "3319.1100": "16K",
-        "3319.1150": "20K",
-        "3319.1200": "25K",
-        "1115": "3/10K",
-        "11110": "3/10K",
-        "11125": "6/20K",
-        "11150": "10K",
-        "11163": "10K",
-        "112.75": "3/10K",
-        "112.710": "3/10K",
-        "112.725": "3/10K",
-        "112.750": "10K",
-        "112.763": "10K",
-        "119.15": "3/10K",
-        "119.110": "3/10K",
-        "119.125": "3/10K",
-        "119.150": "6/20K",
-        "119.163": "6/20K",
-    }
-    return fuse_dict
+    return dict(_FUSE_SIZE_TABLE)
+
+
+_FUSE_SIZE_TABLE = {
+    "21110": "3/10K",
+    "21115": "3/10K",
+    "21125": "6/20K",
+    "21150": "16K",
+    "31115": "3/10K",
+    "31125": "3/10K",
+    "31150": "6/20K",
+    "31163": "6/20K",
+    "31175": "12K",
+    "311100": "16K",
+    "311150": "20K",
+    "311200": "25K",
+    "311250": "31K",
+    "311300": "31K",
+    "311315": "31K",
+    "311500": "50K",
+    "311750": "63K",
+    "3111000": "80K",
+    "3111500": "100K",
+    "22210": "3/10K",
+    "22215": "3/10K",
+    "22225": "3/10K",
+    "22250": "6/20K",
+    "32215": "3/10K",
+    "32225": "3/10K",
+    "32250": "3/10K",
+    "32263": "3/10K",
+    "32275": "6/20K",
+    "322100": "6/20K",
+    "322150": "12K",
+    "322200": "16K",
+    "322250": "20K",
+    "322300": "20K",
+    "322315": "20K",
+    "322500": "31K",
+    "322750": "40K",
+    "3221000": "50K",
+    "3221500": "63K",
+    "23310": "3/10K",
+    "23325": "3/10K",
+    "23350": "3/10K",
+    "33325": "3/10K",
+    "33350": "3/10K",
+    "33363": "3/10K",
+    "333100": "3/10K",
+    "333200": "12K",
+    "333300": "16K",
+    "333315": "16K",
+    "333500": "20K",
+    "111125": "12K",
+    "111150": "16K",
+    "1111100": "25K",
+    "1111150": "31K",
+    "1111200": "40K",
+    "1112.725": "12K",
+    "1112.750": "16K",
+    "1112.7100": "25K",
+    "1112.7150": "31K",
+    "1112.7200": "40K",
+    "2212.725": "6/20K",
+    "2212.750": "10K",
+    "2212.7100": "20K",
+    "2212.7150": "25K",
+    "2212.7200": "31K",
+    "3312.725": "6/20K",
+    "3312.750": "6/20K",
+    "3312.7100": "16K",
+    "3312.7150": "20K",
+    "3312.7200": "25K",
+    "1119.125": "16K",
+    "1119.150": "20K",
+    "1119.1100": "31K",
+    "1119.1150": "40K",
+    "1119.1200": "50K",
+    "2219.125": "6/20K",
+    "2219.150": "6/20K",
+    "2219.1100": "20K",
+    "2219.1150": "25K",
+    "2219.1200": "31K",
+    "3319.125": "6/20K",
+    "3319.150": "6/20K",
+    "3319.1100": "16K",
+    "3319.1150": "20K",
+    "3319.1200": "25K",
+    "1115": "3/10K",
+    "11110": "3/10K",
+    "11125": "6/20K",
+    "11150": "10K",
+    "11163": "10K",
+    "112.75": "3/10K",
+    "112.710": "3/10K",
+    "112.725": "3/10K",
+    "112.750": "10K",
+    "112.763": "10K",
+    "119.15": "3/10K",
+    "119.110": "3/10K",
+    "119.125": "3/10K",
+    "119.150": "6/20K",
+    "119.163": "6/20K",
+}
