@@ -165,22 +165,43 @@ def _noja_logic_rows(
     return row_dict
 
 
+# Returned by update_reclosing_logic when it declined to write the table.
+RECLOSE_UNRESOLVED = "Reclose logic unresolved - left unchanged"
+
+
 def update_reclosing_logic(
     app,
     device_object: Any,
     mapping_file: List[List],
     setting_dictionary: Dict[str, Any]
-) -> None:
+) -> Optional[str]:
+    """
+    Write the RelRecl trip/lockout table (ilogic) and, for NOJA, oplockout.
+
+    Returns None when the table was written or there is nothing to write,
+    or RECLOSE_UNRESOLVED when the computed table would disable every
+    protection block on every trip. That table is never written: it leaves
+    the recloser unable to trip in any study. On 2026-10-03 all 11 NOJA
+    reclosers that SPA found with no pickups (Brendale 9, Beenleigh 2) were
+    in the branch where neither trip-count source resolved and the table
+    was written with oplockout = 1.
+    """
     pf_device = device_object.pf_obj
     device_type = device_object.device
+
+    if not any("_logic" in row[1] for row in mapping_file):
+        # Relay without auto-reclose in its mapping (electromechanical
+        # relays, hydraulic reclosers): nothing to configure. This used to
+        # log a WARNING for every such relay (133 on 2026-10-03).
+        return None
 
     element = _find_reclosing_element(app, pf_device, mapping_file)
     if not element:
         logger.warning(
-            " %s no RelRecl resolved from the mapping file; reclose logic "
-            "table left at default (all disabled)", pf_device.loc_name
+            " %s mapping file has _logic rows but no RelRecl was found in "
+            "the relay; reclose logic table not written", pf_device.loc_name
         )
-        return
+        return RECLOSE_UNRESOLVED
 
     trip_setting = get_trip_num(app, mapping_file, setting_dictionary)
 
@@ -194,6 +215,8 @@ def update_reclosing_logic(
         if sequences:
             op_to_lockout = _noja_sequence_length(sequences)
             row_dict = _noja_logic_rows(sequences, op_to_lockout)
+            if not _any_trip_active(row_dict):
+                return _decline(pf_device, op_to_lockout, "per-trip IPS map")
             element.SetAttribute("e:oplockout", op_to_lockout)
             logger.info(
                 " %s NOJA recloser: %s trips to lockout from the per-trip "
@@ -204,7 +227,7 @@ def update_reclosing_logic(
             _apply_logic_to_element(
                 element, row_dict, op_to_lockout, pf_device.loc_name
             )
-            return
+            return None
 
     # NOJA oplockout has two possible sources and neither is reliable alone:
     #   * _TripstoLockout rows (via get_trip_num) -- present in
@@ -212,11 +235,12 @@ def update_reclosing_logic(
     #   * numeric _logic rows (_noja_trips_to_lockout) -- the reverse.
     # Both floor at 1, so taking the larger picks up whichever the mapping
     # file actually carries. op_to_lockout sizes every row of the table, so
-    # it must be settled before _build_logic_rows runs.
-    if _is_noja_recloser(device_type):
+    # it must be settled before _build_logic_rows runs. It is only WRITTEN
+    # once the table is known to enable something.
+    is_noja = _is_noja_recloser(device_type)
+    if is_noja:
         logic_trips = _noja_trips_to_lockout(mapping_file, setting_dictionary)
         op_to_lockout = max(logic_trips, trip_setting)
-        element.SetAttribute("e:oplockout", op_to_lockout)
         logger.info(
             " %s NOJA recloser: oplockout = %s "
             "(_logic rows gave %s, _TripstoLockout rows gave %s)",
@@ -228,16 +252,36 @@ def update_reclosing_logic(
     if not op_to_lockout or op_to_lockout < 1:
         logger.warning(
             " %s reclosing element oplockout is %r; reclose logic table "
-            "left at default (all disabled)", pf_device.loc_name, op_to_lockout
+            "not written", pf_device.loc_name, op_to_lockout
         )
-        return
+        return RECLOSE_UNRESOLVED
 
     row_dict = _build_logic_rows(
         app, mapping_file, setting_dictionary,
         device_object, op_to_lockout, trip_setting
     )
+    if not _any_trip_active(row_dict):
+        return _decline(pf_device, op_to_lockout, "mapping _logic rows")
 
+    if is_noja:
+        element.SetAttribute("e:oplockout", op_to_lockout)
     _apply_logic_to_element(element, row_dict, op_to_lockout, pf_device.loc_name)
+    return None
+
+
+def _any_trip_active(row_dict: Dict[str, List[float]]) -> bool:
+    """True if any block trips (reclose or lockout) on any trip."""
+    return any(any(v) for v in row_dict.values())
+
+
+def _decline(pf_device: Any, op_to_lockout: Any, source: str) -> str:
+    logger.warning(
+        " %s reclose logic from %s would disable every block on every trip "
+        "(oplockout %s); table and oplockout left unchanged - check the "
+        "mapping file's _logic/_TripstoLockout rows against the IPS "
+        "parameters", pf_device.loc_name, source, op_to_lockout
+    )
+    return RECLOSE_UNRESOLVED
 
 
 def _noja_trips_to_lockout(

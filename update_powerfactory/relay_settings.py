@@ -225,7 +225,11 @@ def relay_settings(
     updates = apply_settings(app, device_object, mapping_file, setting_dict, updates)
 
     # Delegate specialized configuration to sub-modules
-    update_reclosing_logic(app, device_object, mapping_file, setting_dict)
+    reclose_status = update_reclosing_logic(
+        app, device_object, mapping_file, setting_dict
+    )
+    if reclose_status and not result.result:
+        result.result = reclose_status
     update_logic_elements(
         app, device_object.pf_obj, mapping_file, setting_dict, find_element
     )
