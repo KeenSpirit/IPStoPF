@@ -638,6 +638,8 @@ def apply_settings(
     disabled_elements: Dict[Tuple[str, str], Any] = {}
     enabled_elements: Dict[Tuple[str, str], Any] = {}
     find = make_element_finder(pf_device)
+    # Diagnostic: elements a mapping 'outserv' row switched OFF, and why.
+    outserv_off: List[str] = []
 
     for mapped_set in mapping_file:
         # Skip logic elements (handled by sub-modules)
@@ -686,13 +688,58 @@ def apply_settings(
             setting_dict,
             updates,
         )
+        if mapped_set[2] == "outserv":
+            try:
+                is_off = element.GetAttribute("outserv") == 1
+            except AttributeError:
+                is_off = False
+            if is_off:
+                source = (
+                    "IPS value MISSING" if setting is None
+                    else f"IPS value {setting!r}"
+                )
+                outserv_off.append(
+                    f"{mapped_set[0]}/{mapped_set[1]} ({source}, "
+                    f"row ends {mapped_set[-1]!r})"
+                )
 
     updates = _apply_pickup_enable_state(
         pf_device, disabled_elements, enabled_elements, outserv_mapped,
         updates,
     )
 
+    if outserv_off:
+        logger.info(
+            "%s: mapping outserv rows switched OFF %d element(s): %s",
+            pf_device.loc_name, len(outserv_off), "; ".join(outserv_off),
+        )
+    _warn_if_no_live_elements(pf_device)
+
     return updates
+
+
+def _warn_if_no_live_elements(pf_device: Any) -> None:
+    """
+    Warn when no overcurrent element of the relay is left in service.
+
+    SPA reads pickups only from in-service RelToc/RelIoc elements, so such
+    a relay shows blank PH/EF/NPS pickups and is skipped by coordination
+    (9 Brendale NOJA reclosers on 2026-10-03 and 2026-10-04).
+    """
+    try:
+        elements = (
+            pf_device.GetContents("*.RelToc", True)
+            + pf_device.GetContents("*.RelIoc", True)
+        )
+        live = [e for e in elements if e.GetAttribute("outserv") != 1]
+    except AttributeError:
+        return
+    if elements and not live:
+        logger.warning(
+            "%s: all %d overcurrent element(s) are out of service after the "
+            "settings were applied; SPA will find no pickups for this relay",
+            pf_device.loc_name, len(elements),
+        )
 
 
 def _apply_pickup_enable_state(
