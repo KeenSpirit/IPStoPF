@@ -67,3 +67,13 @@ def test_update_ct_without_relay_type_does_not_raise():
     dev = FakeDevice("P", "R1", pf_obj=relay)
     res = cs.update_ct(None, dev, UpdateResult(), ct_library=object())
     assert res.ct_result == "No relay type"
+
+
+def test_placeholder_1_1_model_ct_is_treated_as_no_ct():
+    ct = FakePF("FILASS-FB55-J01-SEF-E_CT", "StaCt", attrs={"ptapset": 1, "stapset": 1})
+    relay = _relay(["StaCt*"], [ct])
+    dev = FakeDevice("MCGG22", "FILASS-FB55-J01-S103-3OC-A-A", pf_obj=relay,
+                     ct_primary=1, ct_secondary=1)
+    res = cs._handle_no_ips_ct(dev, UpdateResult())
+    assert relay.attrs["outserv"] == 1
+    assert res.ct_result == "No CT in IPS or model"

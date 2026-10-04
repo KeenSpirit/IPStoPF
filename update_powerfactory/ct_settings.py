@@ -194,15 +194,27 @@ def _handle_no_ips_ct(device_object: Any, result: UpdateResult) -> UpdateResult:
 
     if ct_obj is not None:
         try:
-            taps = f"{ct_obj.GetAttribute('e:ptapset'):g}/{ct_obj.GetAttribute('e:stapset'):g}"
+            ptap = float(ct_obj.GetAttribute("e:ptapset"))
+            stap = float(ct_obj.GetAttribute("e:stapset"))
         except (AttributeError, TypeError, ValueError):
-            taps = "taps unreadable"
+            ptap = stap = None
+        if ptap and stap and ptap > stap:
+            logger.warning(
+                f"{name}: no CT linked in IPS; kept the CT already in the model "
+                f"({ct_obj.loc_name}, {ptap:g}/{stap:g})"
+            )
+            result.set_ct_info(ct_obj.loc_name, "No CT in IPS - model CT kept")
+            return result
+        # A 1/1 (or unreadable) CT is a placeholder - typically one an earlier
+        # run created with default taps - and reads secondary amps as primary
+        # exactly like an empty slot (26 Gladstone relays, 2026-10-04). Treat
+        # it as no CT and fall through to the out-of-service branch.
         logger.warning(
-            f"{name}: no CT linked in IPS; kept the CT already in the model "
-            f"({ct_obj.loc_name}, {taps})"
+            f"{name}: no CT linked in IPS and the model CT "
+            f"{ct_obj.loc_name} is a placeholder "
+            f"({'unreadable' if ptap is None else f'{ptap:g}/{stap:g}'}); "
+            f"treated as no CT"
         )
-        result.set_ct_info(ct_obj.loc_name, "No CT in IPS - model CT kept")
-        return result
 
     if not has_slot:
         result.ct_result = "No CT slot on relay type"
