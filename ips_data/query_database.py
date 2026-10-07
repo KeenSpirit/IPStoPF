@@ -14,7 +14,7 @@ setting data instead of linear scans through lists.
 import sys
 import time
 from contextlib import closing
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # Import paths from config and add to sys.path
 from config.paths import NETDASH_READER_PATH, ASSET_CLASSES_PATH
@@ -33,8 +33,11 @@ from logging_config import get_logger
 
 logger = get_logger(__name__)
 
-# NetDash (http://eq09808/netdashapi/) is decommissioned. Leave False so an
-# ODS outage fails the project instead of timing out per setting ID.
+# Default for batch_settings' allow_netdash_fallback when the caller does not
+# say. Left False so a called/batch run fails the project loudly on an ODS
+# outage instead of timing out per setting ID. Interactive runs (no ODS
+# credentials on most engineers' machines) pass allow_netdash_fallback=True
+# explicitly - see ips_settings.get_ips_settings and sbtrans_settings.
 ALLOW_NETDASH_FALLBACK = False
 
 # Cache for setting indexes to avoid rebuilding on repeated calls
@@ -230,7 +233,8 @@ def batch_settings(
     app,
     region: str,
     batch: bool,
-    set_ids: List[str]
+    set_ids: List[str],
+    allow_netdash_fallback: Optional[bool] = None,
 ) -> Tuple[Dict[str, List[Dict]], List]:
     """
     Retrieve detailed settings for a batch of relay setting IDs.
@@ -251,6 +255,11 @@ def batch_settings(
         region: "Energex" or "Ergon"
         batch: True if the relay settings should be bulk-loaded here
         set_ids: List of relay setting IDs to fetch
+        allow_netdash_fallback: True to fall back to the NetDash per-ID fetch
+            when no ODS connection can be opened (interactive runs without
+            ODS credentials). False fails the project with TransferError
+            (batch/called runs). None uses the module default
+            ALLOW_NETDASH_FALLBACK.
 
     Returns:
         Tuple of (ips_settings dict, ips_it_settings list)
@@ -258,6 +267,8 @@ def batch_settings(
         - ips_it_settings: List of instrument transformer setting records
     """
     ips_settings: Dict[str, List[Dict]] = {}
+    if allow_netdash_fallback is None:
+        allow_netdash_fallback = ALLOW_NETDASH_FALLBACK
 
     if batch:
         sql = ENERGEX_BATCH_SQL if region == "Energex" else ERGON_BATCH_SQL
@@ -279,7 +290,7 @@ def batch_settings(
                 )
         except ods_connection.ODSUnavailable as exc:
             # Connection-level failure only - query errors propagate.
-            if not ALLOW_NETDASH_FALLBACK:
+            if not allow_netdash_fallback:
                 # NetDash is decommissioned: the per-ID fallback can only
                 # time out, one setting ID at a time. Fail this project
                 # loudly; the mastering layer records it and moves on.
@@ -289,10 +300,14 @@ def batch_settings(
                     f"NetDash fallback is disabled because NetDash is "
                     f"decommissioned",
                 )
-            logger.warning(
+            fallback_msg = (
                 f"ODS bulk fetch unavailable ({exc}); falling back to NetDash "
-                f"per-ID fetch for {len(set_ids)} setting IDs"
+                f"per-ID fetch for {len(set_ids)} setting IDs (one request "
+                f"per ID - this is slow for large selections)"
             )
+            logger.warning(fallback_msg)
+            # PrintPlain stays visible while the echo suppresses warnings.
+            app.PrintPlain(fallback_msg)
             ips_settings = _fetch_settings_in_batches(app, set_ids, fetch_func)
 
     logger.info("Fetching instrument transformer details (cached report)")
@@ -528,13 +543,34 @@ def _fetch_settings_in_batches(
         Combined dictionary of all settings, keyed by setting ID
     """
     ips_settings: Dict[str, List[Dict]] = {}
+    failed: List[str] = []
 
     for i, set_id in enumerate(set_ids):
         if i > 0 and i % batch_size == 0:
             logger.info(f"Processed {i} of {len(set_ids)} settings")
 
-        settings = fetch_func(app, set_id)
+        try:
+            settings = fetch_func(app, set_id)
+        except Exception as exc:  # noqa: BLE001 - log-and-skip per ID
+            # One unreachable/failed ID must not abort the whole fetch.
+            # The device is left with no settings and reports as such.
+            logger.warning(f"NetDash fetch failed for setting ID {set_id}: {exc}")
+            failed.append(set_id)
+            ips_settings[set_id] = []
+            continue
         ips_settings.update(settings)
+
+    if failed:
+        logger.warning(
+            f"NetDash per-ID fetch: {len(failed)} of {len(set_ids)} setting "
+            f"IDs failed: {failed[:20]}{' ...' if len(failed) > 20 else ''}"
+        )
+    if set_ids and len(failed) == len(set_ids):
+        error_message(
+            app,
+            "NetDash per-ID fetch failed for every setting ID - NetDash "
+            "appears to be unreachable",
+        )
 
     return ips_settings
 
