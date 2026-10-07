@@ -72,8 +72,11 @@ def build_devices_from_reconciliation(
     # mirroring ips_data.ips_settings.get_ips_settings (batch path).
     if setting_ids:
         app.PrintPlain(f"Fetching IPS settings for {len(setting_ids)} setting IDs")
+        # Subtransmission is interactive-only, so the NetDash fallback is
+        # always allowed here (no ODS credentials on most machines).
         ips_settings, ips_it_settings = qd.batch_settings(
-            app, REGION, batch=True, set_ids=setting_ids
+            app, REGION, batch=True, set_ids=setting_ids,
+            allow_netdash_fallback=True,
         )
         for device in list_of_devices:
             device.associated_settings(ips_settings)
