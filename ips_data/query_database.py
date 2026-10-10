@@ -27,6 +27,7 @@ sys.path.append(ASSET_CLASSES_PATH)
 import assetclasses
 from assetclasses.corporate_data import get_cached_data
 
+from incremental import recorder as run_recorder
 from ips_data import ods_connection
 from ips_data.setting_index import SettingIndex, create_setting_index
 from logging_config import get_logger
@@ -285,6 +286,11 @@ def batch_settings(
         )
         try:
             with closing(ods_connection.connect_to_db(region)) as connection:
+                # Incremental runs: snapshot the parameter aggregates BEFORE
+                # the fetch, so the stored fingerprint is never newer than
+                # the settings applied. Batch-layer runs only.
+                if run_recorder.active() is not None:
+                    record_ods_fingerprint(connection, set_ids)
                 ips_settings = batch_get_ips_settings(app,
                     connection, set_ids, sql, skip_empty_setting=skip_empty
                 )
@@ -308,7 +314,14 @@ def batch_settings(
             logger.warning(fallback_msg)
             # PrintPlain stays visible while the echo suppresses warnings.
             app.PrintPlain(fallback_msg)
+            run_recorder.mark_incomplete(
+                "ODS unavailable: no parameter aggregates recorded"
+            )
             ips_settings = _fetch_settings_in_batches(app, set_ids, fetch_func)
+    else:
+        run_recorder.mark_incomplete(
+            "settings not bulk-fetched: no parameter aggregates recorded"
+        )
 
     logger.info("Fetching instrument transformer details (cached report)")
     it_start = time.perf_counter()
@@ -320,6 +333,8 @@ def batch_settings(
         f"IT details fetch returned {len(ips_it_settings)} records in "
         f"{time.perf_counter() - it_start:.1f} s"
     )
+    # Incremental runs: the CT/VT rows exactly as applied (no-op unless active).
+    run_recorder.note_it_rows(set_ids, ips_it_settings)
 
     return ips_settings, ips_it_settings
 
@@ -427,6 +442,90 @@ WHERE RelaySetting.RelaySettingID IN ({in_clause})
 ORDER BY RelaySetting.AssetID, RelaySetting.RelaySettingID,
     RelayParamSet.RelayParamSetID, RelParModel.RelParModelID
 """
+
+
+# ---------------------------------------------------------------------------
+# Incremental-run fingerprint of the relay parameters
+#
+# One row per setting ID instead of the full parameter set: the row count,
+# an order-independent hash of every (parameter set, parameter, value), and
+# the latest import date. "content" catches in-place edits and new
+# parameter sets (an As Applied import under an existing setting ID);
+# "dates" drops the hash and only sees counts and import dates - use it if
+# the content hash proves too slow. Changing the mode makes every project
+# run once (the mode is part of each digest).
+#
+# Not covered: changes confined to the IPS model tables (parameter or block
+# renames, enum item text). These are rare, and the 28-day maximum age
+# re-runs every project regardless.
+# ---------------------------------------------------------------------------
+
+ODS_FINGERPRINT_MODE = "content"  # "content" or "dates"
+
+_ODS_FINGERPRINT_SQL = """
+SELECT
+    relayparamset.relaysettingid,
+    COUNT(*) AS n_params,
+    {content_expr} AS content_hash,
+    MAX(relayparamset.dateimportrelay) AS last_import
+FROM
+    edw_ldg_owner.ips_relayparam relayparam
+    INNER JOIN edw_ldg_owner.ips_relayparamset relayparamset ON
+        relayparam.relayparamsetid = relayparamset.relayparamsetid
+WHERE relayparamset.relaysettingid IN ({in_clause})
+    AND relayparam.actual IS NOT NULL
+GROUP BY relayparamset.relaysettingid
+"""
+
+_ODS_CONTENT_EXPR = {
+    "content": (
+        "SUM(ORA_HASH(relayparam.relayparamsetid || '|' || "
+        "relayparam.relparmodelid || '|' || relayparam.actual))"
+    ),
+    "dates": "0",
+}
+
+
+def record_ods_fingerprint(connection, set_ids: List[str]) -> None:
+    """
+    Query the per-setting-ID parameter aggregates and give them to the
+    active run recorder.
+
+    Never raises: a failure is logged and marks the recorder incomplete,
+    so no state is saved and the project runs in full next time. The
+    timing line doubles as the benchmark against the batch fetch.
+    """
+    mode = ODS_FINGERPRINT_MODE
+    unique_ids = list(dict.fromkeys(set_ids))
+    if not unique_ids:
+        run_recorder.note_ods({})
+        return
+    try:
+        sql = _ODS_FINGERPRINT_SQL.replace(
+            "{content_expr}", _ODS_CONTENT_EXPR[mode]
+        )
+        start = time.perf_counter()
+        rows = []
+        n_chunks = 0
+        cursor = connection.cursor()
+        try:
+            for chunk in _chunked(unique_ids, _ORACLE_IN_LIMIT):
+                n_chunks += 1
+                binds = {f"id{i}": sid for i, sid in enumerate(chunk)}
+                in_clause = ", ".join(f":{name}" for name in binds)
+                cursor.execute(sql.replace("{in_clause}", in_clause), binds)
+                rows.extend(cursor.fetchall())
+        finally:
+            cursor.close()
+        run_recorder.note_ods(run_recorder.ods_digests(unique_ids, rows, mode))
+        logger.info(
+            f"ODS fingerprint ({mode}): {len(unique_ids)} setting IDs, "
+            f"{len(rows)} with parameters, {n_chunks} query(ies), "
+            f"{time.perf_counter() - start:.1f} s"
+        )
+    except Exception as exc:  # noqa: BLE001 - must not fail the transfer
+        logger.warning(f"ODS fingerprint query failed; transfer continues: {exc!r}")
+        run_recorder.mark_incomplete(f"ODS fingerprint query failed: {exc!r}")
 
 
 def _chunked(items: List, size: int):

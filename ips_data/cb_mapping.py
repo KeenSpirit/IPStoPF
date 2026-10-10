@@ -13,6 +13,7 @@ from typing import List, Dict, Optional
 
 # Import path from config
 from config.paths import get_cb_alt_name_file
+from incremental import recorder as run_recorder
 
 # Cache for CB alternate names
 _cb_alt_name_cache: Optional[List[Dict[str, str]]] = None
@@ -49,10 +50,15 @@ def get_cb_alt_name_list(app=None) -> List[Dict[str, str]]:
     global _cb_alt_name_cache
 
     if _cb_alt_name_cache is not None:
+        run_recorder.file_used(run_recorder.SHARED_FILE, "CB_ALT_NAME.csv")
         return _cb_alt_name_cache
 
     cb_alt_name_list = []
     filepath = get_cb_alt_name_file()
+    # Incremental runs: hash the file as read (contents cached per process).
+    run_recorder.file_loaded(
+        run_recorder.SHARED_FILE, "CB_ALT_NAME.csv", filepath
+    )
 
     # Values in NEW_NAME column that indicate the mapping should be skipped
     skip_values = {

@@ -15,6 +15,7 @@ from collections import defaultdict
 from typing import Dict, List, Optional, Any
 
 from core import SettingRecord
+from incremental import recorder as run_recorder
 from update_powerfactory.mapping_file import is_excluded_pattern
 from config.region_config import (
     get_substation_mapping,
@@ -264,7 +265,10 @@ class SettingIndex:
         Returns:
             List of matching SettingRecord objects (empty if no match)
         """
-        return self._by_asset_exact.get(asset_name, [])
+        result = self._by_asset_exact.get(asset_name, [])
+        # Incremental runs: replayed by the precheck (no-op unless active).
+        run_recorder.note_lookup("get_by_asset_exact", (asset_name,), result)
+        return result
 
     def get_by_asset_contains(self, device_name: str) -> List[SettingRecord]:
         """
@@ -279,6 +283,13 @@ class SettingIndex:
         Returns:
             List of matching SettingRecord objects
         """
+        result = self._asset_contains(device_name)
+        # Incremental runs: replayed by the precheck (no-op unless active).
+        run_recorder.note_lookup("get_by_asset_contains", (device_name,), result)
+        return result
+
+    def _asset_contains(self, device_name: str) -> List[SettingRecord]:
+        """Body of get_by_asset_contains (unrecorded)."""
         # First try exact match
         exact = self._by_asset_exact.get(device_name, [])
         if exact:
@@ -319,10 +330,16 @@ class SettingIndex:
         if substation_code:
             if substation_code in self._by_substation_and_switch:
                 sub_index = self._by_substation_and_switch[substation_code]
-                return sub_index.get(switch_name, [])
-            return []
-
-        return self._by_switch_name.get(switch_name, [])
+                result = sub_index.get(switch_name, [])
+            else:
+                result = []
+        else:
+            result = self._by_switch_name.get(switch_name, [])
+        # Incremental runs: replayed by the precheck (no-op unless active).
+        run_recorder.note_lookup(
+            "get_by_switch_name", (switch_name, substation_code), result
+        )
+        return result
 
     def get_by_setting_id(self, setting_id: str) -> Optional[SettingRecord]:
         """

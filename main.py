@@ -33,7 +33,7 @@ project's base-project folder name)::
 
 Invocation and the two mode flags
 ---------------------------------
-``main(app=None, batch=False)``
+``main(app=None, batch=False, recorder=None)``
 
     app : PowerFactory application object.
         - None      → interactive run. The module calls
@@ -53,6 +53,11 @@ Invocation and the two mode flags
         When True (or when the user picks "Batch" in the selection
         dialog) every device in the project is processed and settings
         are fetched in one bulk query rather than per device.
+
+    recorder : optional ``incremental.recorder.RunRecorder``, passed by
+        the batch layer to collect the project's incremental-run
+        fingerprint. None (the default, and every interactive run)
+        records nothing.
 
     These two flags are deliberately distinct - see CONTRIBUTING.md.
     Conflating "how were we invoked" with "how do we load settings"
@@ -129,6 +134,7 @@ from ips_data import ips_settings
 from update_powerfactory import orchestrator
 from core import UpdateResult
 from core.update_result import CSV_COLUMNS
+from incremental import recorder as run_recorder
 
 from importlib import reload
 
@@ -144,7 +150,23 @@ from logging_config import setup_logging, get_logger
 setup_logging()
 logger = get_logger(__name__)
 
-def main(app=None, batch=True):
+def main(app=None, batch=True, recorder=None):
+    """
+    Transfer settings from IPS to PF (see the module docstring).
+
+    With a ``recorder``, the run's fingerprint is collected into it; the
+    recorder is complete only if the transfer reaches its normal end.
+    """
+    if recorder is None:
+        return _main(app, batch)
+    with run_recorder.recording(recorder):
+        try:
+            return _main(app, batch)
+        finally:
+            logger.info(recorder.summary())
+
+
+def _main(app=None, batch=True):
     """This Script Will be used to transfer Settings from IPS to PF."""
     timer = Timer(name="IPS to PF Transfer", auto_log=True)
     timer.start()
@@ -288,6 +310,8 @@ def main(app=None, batch=True):
             app.PrintInfo("Of the devices selected there were no updated settings")
             logger.info("Script completed with no updated settings")
 
+        # Incremental runs: the fingerprint is usable only from here.
+        run_recorder.mark_completed()
         return has_updates
     except qd.TransferError as exc:
         # Deliberate aborts: no setting-ID data, no active project, or
