@@ -486,6 +486,42 @@ _ODS_CONTENT_EXPR = {
 }
 
 
+def fetch_ods_digests(connection, set_ids: List[str]) -> Dict[str, str]:
+    """
+    Per-setting-ID digests of the relay parameters, from one aggregate row
+    per setting ID (see ODS_FINGERPRINT_MODE). Shared by the run, which
+    records them, and the incremental precheck, which compares them.
+
+    Every requested ID gets a digest (an ID with no parameters gets the
+    "no rows" digest). Raises on a query failure; callers decide what a
+    failure means for them.
+    """
+    mode = ODS_FINGERPRINT_MODE
+    unique_ids = list(dict.fromkeys(set_ids))
+    if not unique_ids:
+        return {}
+    sql = _ODS_FINGERPRINT_SQL.replace("{content_expr}", _ODS_CONTENT_EXPR[mode])
+    start = time.perf_counter()
+    rows = []
+    n_chunks = 0
+    cursor = connection.cursor()
+    try:
+        for chunk in _chunked(unique_ids, _ORACLE_IN_LIMIT):
+            n_chunks += 1
+            binds = {f"id{i}": sid for i, sid in enumerate(chunk)}
+            in_clause = ", ".join(f":{name}" for name in binds)
+            cursor.execute(sql.replace("{in_clause}", in_clause), binds)
+            rows.extend(cursor.fetchall())
+    finally:
+        cursor.close()
+    logger.info(
+        f"ODS fingerprint ({mode}): {len(unique_ids)} setting IDs, "
+        f"{len(rows)} with parameters, {n_chunks} query(ies), "
+        f"{time.perf_counter() - start:.1f} s"
+    )
+    return run_recorder.ods_digests(unique_ids, rows, mode)
+
+
 def record_ods_fingerprint(connection, set_ids: List[str]) -> None:
     """
     Query the per-setting-ID parameter aggregates and give them to the
@@ -495,34 +531,8 @@ def record_ods_fingerprint(connection, set_ids: List[str]) -> None:
     so no state is saved and the project runs in full next time. The
     timing line doubles as the benchmark against the batch fetch.
     """
-    mode = ODS_FINGERPRINT_MODE
-    unique_ids = list(dict.fromkeys(set_ids))
-    if not unique_ids:
-        run_recorder.note_ods({})
-        return
     try:
-        sql = _ODS_FINGERPRINT_SQL.replace(
-            "{content_expr}", _ODS_CONTENT_EXPR[mode]
-        )
-        start = time.perf_counter()
-        rows = []
-        n_chunks = 0
-        cursor = connection.cursor()
-        try:
-            for chunk in _chunked(unique_ids, _ORACLE_IN_LIMIT):
-                n_chunks += 1
-                binds = {f"id{i}": sid for i, sid in enumerate(chunk)}
-                in_clause = ", ".join(f":{name}" for name in binds)
-                cursor.execute(sql.replace("{in_clause}", in_clause), binds)
-                rows.extend(cursor.fetchall())
-        finally:
-            cursor.close()
-        run_recorder.note_ods(run_recorder.ods_digests(unique_ids, rows, mode))
-        logger.info(
-            f"ODS fingerprint ({mode}): {len(unique_ids)} setting IDs, "
-            f"{len(rows)} with parameters, {n_chunks} query(ies), "
-            f"{time.perf_counter() - start:.1f} s"
-        )
+        run_recorder.note_ods(fetch_ods_digests(connection, set_ids))
     except Exception as exc:  # noqa: BLE001 - must not fail the transfer
         logger.warning(f"ODS fingerprint query failed; transfer continues: {exc!r}")
         run_recorder.mark_incomplete(f"ODS fingerprint query failed: {exc!r}")
