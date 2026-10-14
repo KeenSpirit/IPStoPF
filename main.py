@@ -144,7 +144,7 @@ from logging_config import setup_logging, get_logger
 setup_logging()
 logger = get_logger(__name__)
 
-def main(app=None, batch=True):
+def main(app=None, batch=False):
     """This Script Will be used to transfer Settings from IPS to PF."""
     timer = Timer(name="IPS to PF Transfer", auto_log=True)
     timer.start()
