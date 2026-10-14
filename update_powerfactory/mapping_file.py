@@ -34,6 +34,7 @@ from config.paths import (
     get_relay_map_file,
     RELAY_MAPS_DIR,
 )
+from incremental import recorder as run_recorder
 
 
 # =============================================================================
@@ -218,6 +219,7 @@ def _load_type_mapping() -> Dict[str, Dict[Optional[str], Tuple[str, str]]]:
 
     if _type_mapping_cache is not None:
         _cache_stats["type_mapping_hits"] += 1
+        run_recorder.file_used(run_recorder.SHARED_FILE, "type_mapping.csv")
         return _type_mapping_cache
 
     _cache_stats["type_mapping_misses"] += 1
@@ -225,6 +227,10 @@ def _load_type_mapping() -> Dict[str, Dict[Optional[str], Tuple[str, str]]]:
     _excluded_patterns_cache = set()
 
     filepath = get_type_mapping_file()
+    # Incremental runs: hash the file as read (contents cached per process).
+    run_recorder.file_loaded(
+        run_recorder.SHARED_FILE, "type_mapping.csv", filepath
+    )
 
     try:
         lines = _read_mapping_csv_lines(filepath)
@@ -420,11 +426,14 @@ def _load_mapping_file(filename: str) -> Optional[List[List[str]]]:
 
     if filename in _mapping_file_cache:
         _cache_stats["mapping_file_hits"] += 1
+        run_recorder.file_used(run_recorder.RELAY_MAP, filename)
         return _mapping_file_cache[filename]
 
     _cache_stats["mapping_file_misses"] += 1
 
     filepath = get_relay_map_file(filename)
+    # Incremental runs: hash the file as read (contents cached per process).
+    run_recorder.file_loaded(run_recorder.RELAY_MAP, filename, filepath)
 
     try:
         with open(filepath, "r", encoding="utf-8") as f:
@@ -460,12 +469,17 @@ def _load_curve_mapping() -> List[List[str]]:
 
     if _curve_mapping_cache is not None:
         _cache_stats["curve_mapping_hits"] += 1
+        run_recorder.file_used(run_recorder.SHARED_FILE, "curve_mapping.csv")
         return _curve_mapping_cache
 
     _cache_stats["curve_mapping_misses"] += 1
     _curve_mapping_cache = []
 
     filepath = get_curve_mapping_file()
+    # Incremental runs: hash the file as read (contents cached per process).
+    run_recorder.file_loaded(
+        run_recorder.SHARED_FILE, "curve_mapping.csv", filepath
+    )
 
     try:
         with open(filepath, "r", encoding="utf-8") as f:

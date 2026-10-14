@@ -1,44 +1,4 @@
 
-/
-Claude finished the response
-The latest version of this script is in the GitHub repository in the project knowledge. It now includes assumtions, contributing, and readme .md files. These files were originally written for the ips_to_pf script that focused on the distrbution models. They need to be updated with the new script capabitlies and functionality. Can you please update each of these files to reflect the current state of the script?
-
-9:19 PM
-
-Architected comprehensive documentation overhaul for expanded codebase
-Architected comprehensive documentation overhaul for expanded codebase
-All three files are updated, drawn from the live repository contents rather than memory. The main changes per file:
-
-README.md — Overview now covers the three routed contexts (distribution Energex, distribution Ergon, subtransmission). The project structure tree adds domain/, process_ips/, process_pf_elements/, mapping/, plus sbtrans_settings.py and user_input.py. Usage describes the full subtransmission flow (region selection → ingest → grid selection → element-tree selection with Back → reconcile → device build → update), a new Scope section listing in/out-of-scope elements, and the new five-column type_mapping.csv layout including CT-secondary variant rows.
-
-ASSUMPTIONS.md — Reworked architecture diagrams showing the two routes converging on update_pf, plus a dedicated subtransmission pipeline diagram. New sections document the MappingKey and its normalisation rules (combined zones, NX→TR, busbar suffixes, cap-bank voltage digit, transformer breaker A/B decoding), scope assumptions, the five reconciliation tiers with their invariants (claim semantics, substation-site filter, breaker-bay emit priority), and the pure/PF-runtime boundary including the offline workbook validation path. The update-layer section now covers CT-secondary variant selection, column-B exclusion flags, type-association independence from settings files, and the CP1252 fallback.
-
-CONTRIBUTING.md — Dependency rules rewritten around the new packages, including the purity constraints (mapping never inspects cubicles; only process_elements.py, sbtrans_settings.py, and the update layer touch the PF API). New recipes for excluding patterns via column B, CT-dependent rows, and adding designation forms/fallback tiers. Testing now leads with the offline pytest workflow, and PR guidelines codify your "diff against live code" and "regression test per fix" norms. The PowerFactory output conventions (PrintPlain, echo restoration) are now explicit coding standards.
-
-Two things to verify against the repo, since I couldn't confirm them from project knowledge: the exact filename of the domain/ data-classes module (I described it generically alongside mapping_key.py), and the module name behind oag in main.py (referenced functionally, not by filename). If you give me those names I can drop them into the trees.
-
-
-Readme
-Document · MD 
-
-Assumptions
-Document · MD 
-
-Contributing
-Document · MD 
-
-Fable is the most capable model and draws down usage 2× faster than Opus
-
-
-
-
-
-
-Claude is AI and can make mistakes. Please double-check responses.
-
-
-raw
-Contributing · MD
 # Contributing Guidelines
  
 Thank you for contributing to the IPS to PowerFactory Settings Transfer project!

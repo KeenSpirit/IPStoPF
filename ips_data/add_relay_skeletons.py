@@ -57,6 +57,7 @@ import assetclasses  # noqa: F401,E402
 from assetclasses.corporate_data import get_cached_data  # noqa: E402
 
 from logging_config.logging_utils import get_logger  # noqa: E402
+from incremental import recorder as run_recorder  # noqa: E402
 
 logger = get_logger(__name__)
 
@@ -334,6 +335,18 @@ def process_switch_for_relay_check(
     # Get the expected foreign key (ellipse ID)
     foreign_key = elm.GetAttribute("for_name")
     ecorp_id = ellipse_ecorp_asset_id_extraction(foreign_key, network_level)
+
+    # Incremental runs: record this asset ID's register rows, hits and
+    # misses alike, so a device added to a register later is detected.
+    # Reads with .get(): the defaultdicts gain no keys. No-op unless active.
+    if ecorp_id:
+        run_recorder.note_skeleton(
+            ecorp_id,
+            relay=relay_dict,
+            recloser=recloser_dict,
+            fuse=fuse_dict,
+            gas_switch=gas_switch_dict,
+        )
 
     # Most elements carry no protection device at all (2981 of 5379 in
     # Gladstone on 2026-10-03). Leave before any further PowerFactory call
