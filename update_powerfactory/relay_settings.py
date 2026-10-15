@@ -690,14 +690,14 @@ def apply_settings(
             updates,
         )
 
-        if outserv_off:
-            logger.info(
-                "%s: mapping outserv rows switched OFF %d element(s): %s",
-                pf_device.loc_name, len(outserv_off), "; ".join(outserv_off),
-            )
-        _warn_if_no_live_elements(pf_device)
+    if outserv_off:
+        logger.info(
+            "%s: mapping outserv rows switched OFF %d element(s): %s",
+            pf_device.loc_name, len(outserv_off), "; ".join(outserv_off),
+        )
+    _warn_if_no_live_elements(pf_device)
 
-        return updates
+    return updates
 
 def _warn_if_no_live_elements(pf_device: Any) -> None:
     """
