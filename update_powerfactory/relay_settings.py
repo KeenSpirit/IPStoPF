@@ -30,6 +30,7 @@ import math
 from typing import Dict, List, Tuple, Optional, Any, Union
 
 from update_powerfactory import mapping_file as mf
+from update_powerfactory import noja_function as nf
 from update_powerfactory import ct_settings as cs
 from update_powerfactory import vt_settings as vs
 from update_powerfactory.type_index import RelayTypeIndex
@@ -224,6 +225,19 @@ def relay_settings(
     # Apply settings from mapping file
     updates = apply_settings(app, device_object, mapping_file, setting_dict, updates)
 
+    # A NOJA controller whose IPS trip map leaves no protection element in
+    # service has no protection function (fault indication only, or every
+    # element disabled). Left in service, SPA listed it with blank pickups
+    # (issues log #10). Settings stay written; reclosing, dip and CT/VT
+    # updates are skipped as for switch_/sect_ devices.
+    no_protection = _noja_protection_outcome(
+        device_object, mapping_file, setting_dict, result
+    )
+    if no_protection:
+        device_object.pf_obj.SetAttribute("outserv", 1)
+        result.result = no_protection
+        return result, updates
+
     # Delegate specialized configuration to sub-modules
     reclose_status = update_reclosing_logic(
         app, device_object, mapping_file, setting_dict
@@ -273,6 +287,52 @@ def _enable_configured_skeleton(device_object: Any, result: Any) -> None:
         f"{device_object.name}: skeleton relay configured from IPS; "
         f"placed in service"
     )
+
+
+def _noja_protection_outcome(
+    device_object: Any,
+    mapping_file: List[List],
+    setting_dict: Dict[str, Any],
+    result: Any,
+) -> Optional[str]:
+    """
+    Result string when a NOJA controller has no protection function.
+
+    Returns None (relay processed as normal) for non-NOJA patterns, when an
+    earlier step already recorded a result (e.g. Type not found: no
+    elements to look at), or when at least one protection element is in
+    service. Otherwise noja_function.NO_PROTECTION, or TRIP_MAP_MISSING
+    when none of the trip-map values the mapping file reads were in IPS.
+    """
+    if result.result or not nf.is_noja(device_object.device):
+        return None
+    pf_device = device_object.pf_obj
+    try:
+        if pf_device.typ_id is None:
+            return None
+    except AttributeError:
+        return None
+
+    live = _live_protection_elements(pf_device)
+    found, missing = nf.trip_map_coverage(mapping_file, setting_dict)
+    outcome = nf.classify(len(live), found, missing)
+    if outcome == nf.TRIP_MAP_MISSING:
+        logger.warning(
+            "%s: none of the %d trip-map value(s) read by the mapping file "
+            "for pattern %s were found in its %d IPS parameter(s); no "
+            "protection element in service, relay placed out of service. "
+            "Check the pattern's mapping file in type_mapping.csv",
+            pf_device.loc_name, missing, device_object.device,
+            len(device_object.settings or []),
+        )
+    elif outcome == nf.NO_PROTECTION:
+        logger.info(
+            "%s: IPS trip map leaves no protection element in service "
+            "(%d trip-map value(s) found, %d missing); no protection "
+            "function, relay placed out of service",
+            pf_device.loc_name, found, missing,
+        )
+    return outcome
 
 # =============================================================================
 # Device Classification
@@ -695,31 +755,65 @@ def apply_settings(
             "%s: mapping outserv rows switched OFF %d element(s): %s",
             pf_device.loc_name, len(outserv_off), "; ".join(outserv_off),
         )
-    _warn_if_no_live_elements(pf_device)
+    # NOJA controllers are classified (and taken out of service) by
+    # _noja_protection_outcome instead.
+    if not nf.is_noja(device_object.device):
+        _warn_if_no_live_elements(pf_device)
 
     return updates
 
+
+def _live_protection_elements(pf_device: Any) -> List[Any]:
+    """
+    In-service elements SPA would read a pickup from.
+
+    Same filter as SPA relays/elements.get_prot_elements (see
+    noja_function.is_protection_element). Counting every RelToc/RelIoc
+    counted the NOJA '0 Current Detector', whose outserv row is a constant
+    ON, so the old check never fired for a NOJA.
+    """
+    live = []
+    for class_name in ("RelToc", "RelIoc"):
+        try:
+            elements = pf_device.GetContents(f"*.{class_name}", True)
+        except AttributeError:
+            continue
+        for element in elements:
+            try:
+                outserv = element.GetAttribute("outserv")
+                function = element.GetAttribute("r:typ_id:e:sfiec")
+                target = (
+                    element.GetAttribute("r:typ_id:e:irecltarget")
+                    if class_name == "RelIoc" else None
+                )
+            except AttributeError:
+                # Untyped element: SPA excludes it too.
+                continue
+            if nf.is_protection_element(class_name, outserv, function, target):
+                live.append(element)
+    return live
+
+
 def _warn_if_no_live_elements(pf_device: Any) -> None:
     """
-    Warn when no overcurrent element of the relay is left in service.
+    Warn when no protection element of the relay is left in service.
 
     SPA reads pickups only from in-service RelToc/RelIoc elements, so such
     a relay shows blank PH/EF/NPS pickups and is skipped by coordination
     (9 Brendale NOJA reclosers on 2026-10-03 and 2026-10-04).
     """
     try:
-        elements = (
-                pf_device.GetContents("*.RelToc", True)
-                + pf_device.GetContents("*.RelIoc", True)
+        has_elements = bool(
+            pf_device.GetContents("*.RelToc", True)
+            or pf_device.GetContents("*.RelIoc", True)
         )
-        live = [e for e in elements if e.GetAttribute("outserv") != 1]
     except AttributeError:
         return
-    if elements and not live:
+    if has_elements and not _live_protection_elements(pf_device):
         logger.warning(
-            "%s: all %d overcurrent element(s) are out of service after the "
-            "settings were applied; SPA will find no pickups for this relay",
-            pf_device.loc_name, len(elements),
+            "%s: no protection element is in service after the settings "
+            "were applied; SPA will find no pickups for this relay",
+            pf_device.loc_name,
         )
 
 
