@@ -65,6 +65,7 @@ REPLAYABLE_METHODS = frozenset({
     "get_by_asset_exact",
     "get_by_asset_contains",
     "get_by_switch_name",
+    "get_switch_match",
 })
 
 # Register names exactly as add_relay_skeletons passes them to

@@ -341,6 +341,32 @@ class SettingIndex:
         )
         return result
 
+    def get_switch_match(
+        self,
+        project: str,
+        cls: str,
+        name: str,
+        container: str,
+        fold_name: Optional[str] = None,
+        kv: Optional[float] = None,
+        substation: Optional[str] = None,
+    ) -> List[SettingRecord]:
+        """
+        Records the new Energex switch matcher (mapping/switch_matcher.py)
+        proposes for one switch, before project-wide claims are resolved.
+
+        In "new" switch-matching mode ex_switch_matching calls this for every
+        processed switch, so the lookup is recorded and the incremental
+        precheck can replay it, as it replays get_by_switch_name.
+        """
+        # Local import: keeps this module free of the matcher unless used.
+        from ips_data import ex_switch_matching as esm
+        args = (project, cls, name, container, fold_name, kv, substation)
+        result = esm.propose_records(self, *args)
+        # Incremental runs: replayed by the precheck (no-op unless active).
+        run_recorder.note_lookup("get_switch_match", args, result)
+        return result
+
     def get_by_setting_id(self, setting_id: str) -> Optional[SettingRecord]:
         """
         Get a single record by its relay setting ID.

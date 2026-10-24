@@ -56,15 +56,24 @@ def build_sources(app: Any, region: str) -> PrecheckSources:
         with closing(ods_connection.connect_to_db(region)) as connection:
             return qd.fetch_ods_digests(connection, ids)
 
+    shared_file_paths = {
+        "type_mapping.csv": paths.get_type_mapping_file(),
+        "curve_mapping.csv": paths.get_curve_mapping_file(),
+        "CB_ALT_NAME.csv": paths.get_cb_alt_name_file(),
+    }
+    try:
+        from config import switch_matching
+        shared_file_paths["switch_match_overrides.csv"] = (
+            switch_matching.get_overrides_file()
+        )
+    except Exception:  # switch matcher not deployed: nothing to fingerprint
+        pass
+
     return PrecheckSources(
         setting_index=setting_index,
         skeleton_registers=skeleton_registers,
         it_rows=it_rows,
         ods_digests=ods_digests,
         relay_map_path=paths.get_relay_map_file,
-        shared_file_paths={
-            "type_mapping.csv": paths.get_type_mapping_file(),
-            "curve_mapping.csv": paths.get_curve_mapping_file(),
-            "CB_ALT_NAME.csv": paths.get_cb_alt_name_file(),
-        },
+        shared_file_paths=shared_file_paths,
     )
