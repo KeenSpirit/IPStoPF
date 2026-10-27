@@ -26,7 +26,7 @@ from config.paths import (
     get_protection_batch_output_dir,
 )
 
-MODE = "shadow"
+MODE = "new"
 
 # Rule names from mapping/switch_matcher.py to add to, or remove from, its
 # DEFAULT_RULES. For example ENABLE_RULES = ("transformer_cb",) also matches
