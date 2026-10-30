@@ -166,12 +166,16 @@ def _filter_to_selections(
     filtered = []
 
     for device in list_of_devices:
-        # Build possible name variations
+        # Build possible name variations, shortened exactly as
+        # _get_device_name shortens them, so a relay whose full name is
+        # over PowerFactory's 40-character limit can still be selected.
         if device.device_id:
-            name_v1 = f"{device.name}_{device.device_id}".rstrip()
-            name_v2 = f"{device.name}_{device.device_id}_{device.seq_name}".rstrip()
+            name_v1 = _fit_pf_name(device.name, f"_{device.device_id}")
+            name_v2 = _fit_pf_name(
+                device.name, f"_{device.device_id}_{device.seq_name}"
+            )
         else:
-            name_v1 = f"{device.name}_{device.seq_name}".rstrip()
+            name_v1 = _fit_pf_name(device.name, f"_{device.seq_name}")
             name_v2 = None
 
         # Check if any variation is in selections
@@ -362,11 +366,15 @@ def _assign_pf_objects(
     result: List[ProtectionDevice] = []
 
     for device in list_of_devices:
-        device_name = _get_device_name(device, used_names)
+        full_name, device_name = _device_names(device, used_names)
         used_names.add(device_name)
 
         switch = device.switch
-        pf_obj = _find_or_create_pf_device(switch, device_name)
+        # Fuse or relay is decided on the full name, as before: a
+        # shortened name may have lost the "fuse" in it.
+        pf_obj = _find_or_create_pf_device(
+            switch, device_name, is_fuse="fuse" in full_name.lower()
+        )
 
         if pf_obj and pf_obj.loc_name == device_name:
             device.pf_obj = pf_obj
@@ -396,38 +404,92 @@ def _assign_pf_objects(
                     UpdateResult.info_record(pf_device=None, result_message="No cubicle for device")
                 )
 
-    return result
+        return result
 
+    # PowerFactory truncates loc_name to 40 characters. A longer name made
+    # CreateObject return an object named differently from the one asked for,
+    # which _assign_pf_objects then deleted and skipped.
+    PF_NAME_MAX = 40
+    # Below this many characters of the IPS name the shortened name would no
+    # longer say which switch it belongs to; the whole name is cut instead.
+    _MIN_STEM = 8
 
-def _get_device_name(device: ProtectionDevice, used_names: Set[str]) -> str:
-    """
-    Generate the PowerFactory device name.
+    def _fit_pf_name(stem: str, suffix: str) -> str:
+        """
+        ``stem + suffix`` (right-stripped), shortened to PowerFactory's limit.
 
-    Args:
-        device: The protection device
+        A name within the limit is returned unchanged, so no existing device
+        is renamed. A longer one keeps the whole suffix (the IPS device id and
+        asset name, e.g. ``_2OCEF(Cphase)_TJM11_C``, which is what tells sibling
+        relays apart) and cuts the stem (the IPS name) to fit. The result is the
+        same on every run.
+        """
+        full = f"{stem}{suffix}".rstrip()
+        if len(full) <= PF_NAME_MAX:
+            return full
+        suffix = suffix.rstrip()
+        room = PF_NAME_MAX - len(suffix)
+        if room < _MIN_STEM:
+            return full[:PF_NAME_MAX].rstrip()
+        return stem[:room].rstrip(" _+") + suffix
+
+    def _get_device_name(device: ProtectionDevice, used_names: Set[str]) -> str:
+        """
+        Generate the PowerFactory device name.
+
+        Names are ``<IPS name>_<device id>``, or ``<IPS name>_<device id>_<asset>``
+        when the first is already used in the project, or ``<IPS name>_<asset>``
+        with no device id. A name over PowerFactory's 40-character limit is
+        shortened by _fit_pf_name; if the shortened name is already used, ``~2``,
+        ``~3`` ... is added. Names within the limit are unchanged.
+
+        Args:
+            device: The protection device
         used_names: Set of already-used names
 
-    Returns:
+        Returns:
         The device name to use
     """
+    return _device_names(device, used_names)[1]
+
+
+def _device_names(device: ProtectionDevice, used_names: Set[str]) -> Tuple[str, str]:
+    """(full name, PowerFactory name); the same string unless shortened."""
     if not device.device_id:
-        return f"{device.name}_{device.seq_name}".rstrip()
+        stem, suffix = device.name, f"_{device.seq_name}"
+    else:
+        stem, suffix = device.name, f"_{device.device_id}"
+        if _fit_pf_name(stem, suffix) in used_names:
+            suffix = f"_{device.device_id}_{device.seq_name}"
 
-    base_name = f"{device.name}_{device.device_id}".rstrip()
+    name = _fit_pf_name(stem, suffix)
+    full = f"{stem}{suffix}".rstrip()
+    if name == full:
+        return full, name
 
-    if base_name in used_names:
-        return f"{device.name}_{device.device_id}_{device.seq_name}".rstrip()
+    # Shortened. Two long names can shorten to the same string; only these
+    # (previously unplaceable) names get a tag, so nothing else changes.
+    tagged, n = name, 2
+    while tagged in used_names:
+        tagged = _fit_pf_name(stem, f"{suffix.rstrip()}~{n}")
+        n += 1
+    logger.info(
+        f"Device name '{full}' ({len(full)} characters) is over "
+        f"PowerFactory's {PF_NAME_MAX}; named '{tagged}'"
+    )
+    return full, tagged
 
-    return base_name
 
-
-def _find_or_create_pf_device(switch, device_name: str):
+def _find_or_create_pf_device(switch, device_name: str, is_fuse: Optional[bool] = None):
     """
     Find existing or create new PowerFactory protection device.
 
     Args:
         switch: The associated switch object
         device_name: Name for the device
+        is_fuse: Create a RelFuse rather than an ElmRelay. None decides
+            from device_name, as before; _assign_pf_objects passes the
+            answer for the full name, which a shortened name may not show.
 
     Returns:
         The PowerFactory device object
@@ -447,8 +509,10 @@ def _find_or_create_pf_device(switch, device_name: str):
     if contents:
         return contents[0]
 
-    # Create new device
-    if "fuse" in device_name.lower():
+        # Create new device
+    if is_fuse is None:
+        is_fuse = "fuse" in device_name.lower()
+    if is_fuse:
         new_device = cubicle.CreateObject("RelFuse", device_name)
     else:
         new_device = cubicle.CreateObject("ElmRelay", device_name)
