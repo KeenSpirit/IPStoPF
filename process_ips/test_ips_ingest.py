@@ -134,7 +134,7 @@ def test_scope_keeps_subtransmission_feeders_and_switches():
 # Site-code mapping
 # --------------------------------------------------------------------------- #
 
-_MAP = {"T136": "ABM", "T124": None, "H31": "MRD"}
+_MAP = {"T136": "ABM", "T124": None, "H31": "MDR"}
 
 
 def test_resolve_site_code_translates_numeric_code():

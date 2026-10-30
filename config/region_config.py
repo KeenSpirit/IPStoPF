@@ -44,7 +44,7 @@ def get_substation_mapping() -> Dict[str, Optional[str]]:
     """
     return {
         "H22": "LGL",
-        "H31": "MRD",
+        "H31": "MDR",  # Mudgeeraba. Was "MRD" (a different IPS site) until 2026-10-30
         "H38": "GNA",
         "H4": "MGB",
         "T108": "BLH",
