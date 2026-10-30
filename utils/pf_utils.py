@@ -390,6 +390,15 @@ def _kv(value: float) -> str:
     return f"{round(value + 1e-9, 1):g}"
 
 
+def _kva(strn: float) -> int:
+    """Rating in kVA from TypTr2.strn (MVA), rounded to the nearest kVA.
+
+    strn is held in single precision, so 0.010 MVA reads back as
+    0.0099999998 and int(strn * 1000) gives 9; 0.315 gives 314.
+    """
+    return int(round(float(strn) * 1000))
+
+
 def tx_fuse_size(
     nt2ph: Any,
     utrn_h: float,
@@ -408,16 +417,16 @@ def tx_fuse_size(
     single-phase transformer fell back to 3/10K without a word.
     """
     size_dict = _FUSE_SIZE_TABLE
+    rating = _kva(strn)
     if nt2ph == 3:
-        keys = [f"3{_kv(utrn_h)}{int(round(strn, 4) * 1000)}"]
+        keys = [f"3{_kv(utrn_h)}{rating}"]
     elif swer_isolator:
-        rating = int(float(strn) * 1000)
         keys = [f"{_kv(utrn_h)}{_kv(utrn_l)}{rating}",
                 f"{_kv(utrn_l)}{_kv(utrn_h)}{rating}"]
     elif single_phase_bus:
-        keys = [f"1{_kv(utrn_h)}{int(float(strn) * 1000)}"]
+        keys = [f"1{_kv(utrn_h)}{rating}"]
     else:
-        keys = [f"{nt2ph}{_kv(utrn_h)}{int(round(strn, 4) * 1000)}"]
+        keys = [f"{nt2ph}{_kv(utrn_h)}{rating}"]
     for key in keys:
         if key in size_dict:
             return size_dict[key], keys, False
