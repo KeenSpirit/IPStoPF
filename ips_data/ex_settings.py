@@ -404,52 +404,52 @@ def _assign_pf_objects(
                     UpdateResult.info_record(pf_device=None, result_message="No cubicle for device")
                 )
 
-        return result
+    return result
 
-    # PowerFactory truncates loc_name to 40 characters. A longer name made
-    # CreateObject return an object named differently from the one asked for,
-    # which _assign_pf_objects then deleted and skipped.
-    PF_NAME_MAX = 40
-    # Below this many characters of the IPS name the shortened name would no
-    # longer say which switch it belongs to; the whole name is cut instead.
-    _MIN_STEM = 8
+# PowerFactory truncates loc_name to 40 characters. A longer name made
+# CreateObject return an object named differently from the one asked for,
+# which _assign_pf_objects then deleted and skipped.
+PF_NAME_MAX = 40
+# Below this many characters of the IPS name the shortened name would no
+# longer say which switch it belongs to; the whole name is cut instead.
+_MIN_STEM = 8
 
-    def _fit_pf_name(stem: str, suffix: str) -> str:
-        """
-        ``stem + suffix`` (right-stripped), shortened to PowerFactory's limit.
-
-        A name within the limit is returned unchanged, so no existing device
-        is renamed. A longer one keeps the whole suffix (the IPS device id and
-        asset name, e.g. ``_2OCEF(Cphase)_TJM11_C``, which is what tells sibling
-        relays apart) and cuts the stem (the IPS name) to fit. The result is the
-        same on every run.
-        """
-        full = f"{stem}{suffix}".rstrip()
-        if len(full) <= PF_NAME_MAX:
-            return full
-        suffix = suffix.rstrip()
-        room = PF_NAME_MAX - len(suffix)
-        if room < _MIN_STEM:
-            return full[:PF_NAME_MAX].rstrip()
-        return stem[:room].rstrip(" _+") + suffix
-
-    def _get_device_name(device: ProtectionDevice, used_names: Set[str]) -> str:
-        """
-        Generate the PowerFactory device name.
-
-        Names are ``<IPS name>_<device id>``, or ``<IPS name>_<device id>_<asset>``
-        when the first is already used in the project, or ``<IPS name>_<asset>``
-        with no device id. A name over PowerFactory's 40-character limit is
-        shortened by _fit_pf_name; if the shortened name is already used, ``~2``,
-        ``~3`` ... is added. Names within the limit are unchanged.
-
-        Args:
-            device: The protection device
-        used_names: Set of already-used names
-
-        Returns:
-        The device name to use
+def _fit_pf_name(stem: str, suffix: str) -> str:
     """
+    ``stem + suffix`` (right-stripped), shortened to PowerFactory's limit.
+
+    A name within the limit is returned unchanged, so no existing device
+    is renamed. A longer one keeps the whole suffix (the IPS device id and
+    asset name, e.g. ``_2OCEF(Cphase)_TJM11_C``, which is what tells sibling
+    relays apart) and cuts the stem (the IPS name) to fit. The result is the
+    same on every run.
+    """
+    full = f"{stem}{suffix}".rstrip()
+    if len(full) <= PF_NAME_MAX:
+        return full
+    suffix = suffix.rstrip()
+    room = PF_NAME_MAX - len(suffix)
+    if room < _MIN_STEM:
+        return full[:PF_NAME_MAX].rstrip()
+    return stem[:room].rstrip(" _+") + suffix
+
+def _get_device_name(device: ProtectionDevice, used_names: Set[str]) -> str:
+    """
+    Generate the PowerFactory device name.
+
+    Names are ``<IPS name>_<device id>``, or ``<IPS name>_<device id>_<asset>``
+    when the first is already used in the project, or ``<IPS name>_<asset>``
+    with no device id. A name over PowerFactory's 40-character limit is
+    shortened by _fit_pf_name; if the shortened name is already used, ``~2``,
+    ``~3`` ... is added. Names within the limit are unchanged.
+
+    Args:
+        device: The protection device
+    used_names: Set of already-used names
+
+    Returns:
+    The device name to use
+"""
     return _device_names(device, used_names)[1]
 
 
