@@ -604,7 +604,7 @@ class SwitchMatcher:
             the report's column names).
         overrides: Rows from switch_match_overrides.csv.
         cb_alt_names: {(fold_id loc_name, switch loc_name): NEW_NAME}, as
-            ``ex_settings.cb_alt_name_index`` builds from CB_ALT_NAME.csv.
+            ``ex_switch_matching._cb_alt_name_index`` builds from CB_ALT_NAME.csv.
         rules: Rule names to enable (default ``DEFAULT_RULES``).
     """
 

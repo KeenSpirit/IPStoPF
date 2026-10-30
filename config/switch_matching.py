@@ -5,17 +5,8 @@ The matcher itself is mapping/switch_matcher.py; ips_data/ex_switch_matching.py
 runs it inside IPStoPF; switch_match_audit.py runs it offline over the whole
 fleet.
 
-MODE
-    "legacy" - the original lookup (switch name up to the first "_") drives
-               the model. The new matcher does not run.
-    "shadow" - the original lookup still drives the model. The new matcher
-               runs alongside it, logs every switch where it would give a
-               different result, and writes the match log. Nothing in the
-               model changes because of it.
-    "new"    - the new matcher drives the model.
-
-Start on "shadow", compare a run's log lines and match logs with what you
-expect, then switch to "new".
+The matcher is the only Energex switch lookup. The old name lookup and the
+"legacy" / "shadow" modes were removed on 2026-10-30.
 """
 
 from pathlib import Path
@@ -26,6 +17,10 @@ from config.paths import (
     get_protection_batch_output_dir,
 )
 
+# No longer read by IPStoPF. Kept, set to "new", only so that an
+# ips_data/ex_settings.py from before 2026-10-30 still runs the matcher if
+# this file is deployed without it (that version treats a missing MODE as
+# "legacy"). Delete once every copy of ex_settings.py is the new one.
 MODE = "new"
 
 # Rule names from mapping/switch_matcher.py to add to, or remove from, its

@@ -3,8 +3,8 @@ Run the switch matcher (mapping/switch_matcher.py) inside IPStoPF.
 
 PowerFactory runtime module. It only reads the model: switch names, their
 containers, terminal voltages and the relays/fuses already in each cubicle.
-ex_settings decides what to do with the result (see config/switch_matching.py
-for the legacy / shadow / new modes).
+ex_settings decides what to do with the result (settings in
+config/switch_matching.py).
 
 It also writes the per-project match log: one row per switch in the project,
 with the same switch columns as export_pf_switches.py plus how the switch
@@ -36,9 +36,11 @@ SWITCH_COLUMNS = [
     "terminal_name", "terminal_kv", "substation", "substation_class",
     "relays", "fuses",
 ]
+# match_mode and legacy_setting_ids were dropped with the shadow mode
+# (2026-10-30); switch_match_audit.py reads older logs that have them too.
 MATCH_COLUMNS = [
-    "match_mode", "match_status", "match_rule", "ips_names", "setting_ids",
-    "legacy_setting_ids", "rejections", "match_note",
+    "match_status", "match_rule", "ips_names", "setting_ids",
+    "rejections", "match_note",
 ]
 
 
@@ -225,22 +227,19 @@ class ProjectSwitchMatching:
         prjt: Active project.
         setting_index: The run's SettingIndex.
         batch: True in a batch run (decides where the match log goes).
-        record_lookups: True when these results drive the model ("new"
-            mode): every processed switch's lookup is then recorded for the
-            incremental precheck, as the legacy lookups are.
+
+    Every processed switch's lookup is recorded (SettingIndex.
+    get_switch_match) so the incremental precheck can replay it.
     """
 
-    def __init__(self, app, prjt, setting_index, batch: bool,
-                 record_lookups: bool = False):
+    def __init__(self, app, prjt, setting_index, batch: bool):
         self.app = app
         self.prjt = prjt
         self.batch = batch
         self.setting_index = setting_index
-        self.record_lookups = record_lookups
         self.matcher = matcher_for(setting_index)
         self.by_key: Dict[str, sm.SwitchMatch] = {}
         self.rows: Dict[str, Dict[str, Any]] = {}
-        self.legacy: Dict[str, List[str]] = {}
         self.order: List[str] = []
 
     @staticmethod
@@ -283,12 +282,12 @@ class ProjectSwitchMatching:
             try:
                 ref, row = describe_switch(switch, base, is_valid, passes)
             except Exception as e:
-                # The switch then has no result; ex_settings uses the legacy
-                # lookup for it.
+                # The switch then has no result; ex_settings skips it and
+                # leaves its cubicle unchanged.
                 skipped += 1
                 logger.warning(
                     f"Switch matching: could not read '{_safe(lambda: switch.loc_name, '?')}' "
-                    f"({e!r}); legacy lookup used for it"
+                    f"({e!r}); switch skipped"
                 )
                 continue
             ref = dataclasses.replace(ref, key=key)
@@ -300,9 +299,8 @@ class ProjectSwitchMatching:
             for ref, result in zip(refs, self.matcher.match_all(refs)):
                 self.by_key[ref.key] = result
 
-        if self.record_lookups:
-            for ref in processed_refs:
-                self.setting_index.get_switch_match(*_lookup_args(ref))
+        for ref in processed_refs:
+            self.setting_index.get_switch_match(*_lookup_args(ref))
 
         logger.info(
             f"Switch matching: {len(processed_refs)} processed and "
@@ -318,41 +316,19 @@ class ProjectSwitchMatching:
     def records_for(self, switch: Any) -> Optional[List[Any]]:
         """
         The records for a switch, or None when the matcher has no result
-        for it (the caller then uses the legacy lookup).
+        for it (it could not be read; the caller then skips the switch).
         """
         result = self.result_for(switch)
         return result.records if result is not None else None
 
     def is_legacy_record(self, switch: Any, setting_id: str) -> bool:
+        """
+        True when the old name lookup would also have given this record.
+        ex_settings names these devices first, so device names the master
+        models carry are kept.
+        """
         result = self.result_for(switch)
         return bool(result is not None and result.is_legacy_entry(setting_id))
-
-    def note_legacy(self, switch: Any, setting_ids: List[str]) -> None:
-        """Shadow mode: record what the legacy lookup produced."""
-        try:
-            self._note_legacy(switch, setting_ids)
-        except Exception:
-            logger.warning("Switch matching: shadow comparison failed", exc_info=True)
-
-    def _note_legacy(self, switch: Any, setting_ids: List[str]) -> None:
-        key = self._key(switch)
-        if key is None:
-            return
-        self.legacy[key] = list(setting_ids)
-        result = self.by_key.get(key)
-        if result is None:
-            return
-        new_ids = result.setting_ids
-        if new_ids == list(setting_ids):
-            return
-        logger.info(
-            f"Switch match [shadow] '{switch.loc_name}': legacy "
-            f"{len(setting_ids)} record(s), new {len(new_ids)} "
-            f"({result.status}"
-            + (f", {result.rule} via '{result.pf_name}'" if result.rule else "")
-            + (f"; {result.rejections[-1].reason}" if result.rejections and not new_ids else "")
-            + ")"
-        )
 
     def finish(self, write_log: bool = True) -> Optional[str]:
         """Log the project summary and, optionally, write the match log."""
@@ -362,16 +338,10 @@ class ProjectSwitchMatching:
         rules = Counter(self.by_key[k].rule for k in processed
                         if k in self.by_key and self.by_key[k].status == sm.MATCHED)
         msg = (
-            f"Switch matching ({smc.MODE}): {len(processed)} processed switch(es): "
+            f"Switch matching: {len(processed)} processed switch(es): "
             + ", ".join(f"{k} {v}" for k, v in sorted(status.items()))
             + "; rules: " + ", ".join(f"{k} {v}" for k, v in rules.most_common())
         )
-        if self.legacy:
-            same = sum(
-                1 for k, ids in self.legacy.items()
-                if k in self.by_key and self.by_key[k].setting_ids == ids
-            )
-            msg += f"; same as legacy for {same} of {len(self.legacy)}"
         problems = [self.by_key[k].override_problem for k in processed
                     if k in self.by_key and self.by_key[k].override_problem]
         for problem in problems:
@@ -398,7 +368,6 @@ class ProjectSwitchMatching:
             for key in self.order:
                 row = dict(self.rows[key])
                 result = self.by_key.get(key)
-                row["match_mode"] = smc.MODE
                 if result is not None:
                     row.update({
                         "match_status": result.status,
@@ -411,8 +380,6 @@ class ProjectSwitchMatching:
                         ),
                         "match_note": result.note,
                     })
-                if key in self.legacy:
-                    row["legacy_setting_ids"] = "; ".join(self.legacy[key])
                 writer.writerow(row)
         logger.info(f"Switch match log: {path}")
         return path

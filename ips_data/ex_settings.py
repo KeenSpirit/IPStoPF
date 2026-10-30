@@ -9,18 +9,17 @@ This module handles the Energex-specific logic for:
 The module uses SettingIndex for efficient O(1) lookups instead of
 linear scans through the settings list.
 
-Switch matching: config/switch_matching.py MODE selects the original name
-lookup (_get_setting_id_indexed, "legacy"), the original lookup with the
-new matcher alongside it for comparison ("shadow"), or the new matcher
-(mapping/switch_matcher.py, run by ips_data/ex_switch_matching.py, "new").
-If the new files are missing or fail to import, the legacy lookup runs.
+Switch matching: every switch is matched to IPS by the switch matcher
+(mapping/switch_matcher.py, run by ips_data/ex_switch_matching.py; settings
+in config/switch_matching.py). The old name lookup (switch name up to the
+first "_", the "legacy" and "shadow" modes) was removed on 2026-10-30 after
+the 28 Oct fleet run confirmed the matcher in "new" mode.
 """
 
 from typing import Dict, List, Optional, Tuple, Set, Any
 
 from core import ProtectionDevice, SettingRecord, UpdateResult
 from ips_data import query_database as qd
-from ips_data.cb_mapping import get_cb_alt_name_list
 from ips_data.setting_index import SettingIndex
 
 from logging_config import get_logger
@@ -28,23 +27,6 @@ from logging_config import get_logger
 logger = get_logger(__name__)
 
 from utils.pf_utils import get_all_protection_devices, get_live_relays
-
-
-def _switch_match_mode() -> str:
-    """config.switch_matching.MODE; "legacy" if the config is unavailable."""
-    try:
-        from config import switch_matching as smc
-        mode = getattr(smc, "MODE", "legacy")
-    except Exception:
-        logger.warning(
-            "config/switch_matching.py could not be imported; legacy switch "
-            "matching used", exc_info=True,
-        )
-        return "legacy"
-    if mode not in ("legacy", "shadow", "new"):
-        logger.warning(f"Unknown switch matching MODE {mode!r}; legacy used")
-        return "legacy"
-    return mode
 
 
 def ex_device_list(
@@ -75,35 +57,30 @@ def ex_device_list(
     switches = _get_switches_for_selections(app, selections, device_dict, raw_switches)
 
     # Convert switches to setting IDs and devices
-    cb_alt_name_list = cb_alt_name_index(get_cb_alt_name_list(app))
     list_of_devices: List[ProtectionDevice] = []
     late_devices: List[ProtectionDevice] = []
     setting_ids: List[str] = []
 
     # The selection is matched together with every switch a batch run
     # would process, so the claim rules give the same answer as in batch.
-    mode = _switch_match_mode()
-    matching = None
-    if mode in ("shadow", "new"):
-        def considered():
-            valid = _get_valid_switches(prjt)
-            return list(dict.fromkeys(
-                [s for s in valid if _should_process_switch(s)] + list(switches)
-            ))
-        matching = _start_matching(
-            app, prjt, setting_index, False, mode, considered,
-            None, lambda s: True,
-        )
+    def considered():
+        valid = _get_valid_switches(prjt)
+        return list(dict.fromkeys(
+            [s for s in valid if _should_process_switch(s)] + list(switches)
+        ))
+    matching = _start_matching(
+        app, prjt, setting_index, False, considered, None, lambda s: True,
+    )
 
     for switch in switches:
         new_ids, list_of_devices = _match_one_switch(
-            app, switch, list_of_devices, late_devices, setting_index,
-            False, cb_alt_name_list, mode, matching,
+            app, switch, list_of_devices, late_devices, batch=False,
+            matching=matching,
         )
-        setting_ids.extend(new_ids)
+        if new_ids is not None:
+            setting_ids.extend(new_ids)
     list_of_devices.extend(late_devices)
-    if matching is not None:
-        _finish_matching(matching, write_log=False)
+    _finish_matching(matching, write_log=False)
 
     # Filter to only include explicitly selected devices
     list_of_devices = _filter_to_selections(list_of_devices, selections, device_dict)
@@ -209,7 +186,6 @@ def create_new_devices(
         Tuple of (list_of_devices, failed_cbs, setting_ids)
     """
     prjt = app.GetActiveProject()
-    cb_alt_name_list = cb_alt_name_index(get_cb_alt_name_list(app))
 
     # Get all valid switches
     switches = _get_valid_switches(prjt)
@@ -219,20 +195,17 @@ def create_new_devices(
     list_of_devices: List[ProtectionDevice] = []
     late_devices: List[ProtectionDevice] = []
 
-    # New matcher (shadow or new mode). Runs before the loop below, so the
-    # match log records each cubicle's relays before an unmatched switch's
-    # are deleted.
-    mode = _switch_match_mode()
-    matching = None
-    if mode in ("shadow", "new"):
-        matching = _start_matching(
-            app, prjt, setting_index, batch, mode,
-            lambda: (
-                prjt.GetContents("*.StaSwitch", True)
-                + prjt.GetContents("*.ElmCoup", True)
-            ),
-            switches, _should_process_switch,
-        )
+    # Match every switch first, so the match log records each cubicle's
+    # relays before an unmatched switch's are deleted. A failure here
+    # raises TransferError before anything in the model has changed.
+    matching = _start_matching(
+        app, prjt, setting_index, batch,
+        lambda: (
+            prjt.GetContents("*.StaSwitch", True)
+            + prjt.GetContents("*.ElmCoup", True)
+        ),
+        switches, _should_process_switch,
+    )
 
     for i, switch in enumerate(switches):
         if i % 10 == 0:
@@ -242,23 +215,29 @@ def create_new_devices(
         if not _should_process_switch(switch):
             continue
 
-        initial_count = len(setting_ids)
-
         new_ids, list_of_devices = _match_one_switch(
-            app, switch, list_of_devices, late_devices, setting_index,
-            batch, cb_alt_name_list, mode, matching,
+            app, switch, list_of_devices, late_devices, batch=batch,
+            matching=matching,
         )
+
+        # The matcher could not read this switch: leave its cubicle as it
+        # is (no devices, nothing deleted). Its relays then go through the
+        # orphan sweep, which logs them.
+        if new_ids is None:
+            continue
+
         setting_ids.extend(new_ids)
 
         # Handle switches with no IPS data found
-        if len(setting_ids) == initial_count:
+        if not new_ids:
             _handle_unmatched_switch(switch, failed_cbs)
 
-    if matching is not None:
-        _finish_matching(matching, write_log=True)
+    _finish_matching(matching, write_log=True)
 
-    # Devices from records the legacy lookup would not have found are named
-    # last, so every device the legacy lookup creates keeps its name.
+    # Devices from records the old name lookup would not have found are
+    # named last, so every device name the old lookup gave (the names the
+    # master models carry) is kept. Permanent: changing the order would
+    # rename devices and orphan the master's relays.
     list_of_devices.extend(late_devices)
 
     # Create/assign PowerFactory objects for all devices
@@ -551,84 +530,23 @@ def _get_assoc_switch(pf_device, raw_switches: List):
     return None
 
 
-def _get_setting_id_indexed(
-    app,
-    switch,
-    list_of_devices: List[ProtectionDevice],
-    setting_index: SettingIndex,
-    batch: bool,
-    cb_alt_name_list: List[Dict],
-) -> Tuple[List[str], List[ProtectionDevice]]:
-    """
-    Find setting IDs for a switch using indexed lookup.
-
-    The index handles double cable box expansion (e.g., "NIP1A+B" is indexed
-    under both "NIP1A" and "NIP1B"), so a simple lookup by switch_name will
-    return all matching records including those from combined devices.
-
-    Note: Devices with identical attributes but different switches are allowed
-    by design. The same setting record may create multiple device objects if
-    it protects multiple switches (e.g., "NIP1A+B" creates devices for both
-    switch "NIP1A" and switch "NIP1B"). This is handled later in the
-    update_powerfactory portion of the script.
-
-    Args:
-        app: PowerFactory application object
-        switch: The switch to find settings for
-        list_of_devices: List to append new devices to
-        setting_index: Indexed IPS settings
-        batch: True if batch update
-        cb_alt_name_list: CB name mapping list
-
-    Returns:
-        Tuple of (new_setting_ids, updated list_of_devices)
-    """
-    setting_ids: List[str] = []
-
-    # Get switch name (potentially mapped)
-    switch_name, sub_code = _get_switch_info(switch, cb_alt_name_list)
-
-    if len(switch_name) < 4:
-        return setting_ids, list_of_devices
-
-    # Look up matching records (O(1) lookup)
-    # The index already handles "A+B" expansion, so "NIP1A+B" is indexed under
-    # both "NIP1A" and "NIP1B"
-    records = setting_index.get_by_switch_name(switch_name, sub_code)
-    # Debug code:
-    # logger.info(f"switch_name: {switch_name}, sub_code: {sub_code}")
-    # logger.info(f"records: {records}")
-
-    # Create devices from matching records
-    for record in records:
-        device = _create_device_from_record(
-            app, record, switch, batch
-        )
-
-        if device:
-            # Add to list - duplicates with different switches are allowed by design
-            # Each setting ID that matches a switch creates a device object
-            list_of_devices.append(device)
-            setting_ids.append(record.relaysettingid)
-
-    return setting_ids, list_of_devices
-
-
 def _start_matching(
     app,
     prjt,
     setting_index: SettingIndex,
     batch: bool,
-    mode: str,
     all_switches,
     valid_switches,
     should_process,
 ):
     """
-    Run the new matcher for the project; None if anything fails.
+    Run the switch matcher for the project.
 
-    A failure here must not stop the transfer: the project then runs on the
-    legacy lookup, and the log says so.
+    Raises TransferError if it fails. There is no fallback lookup any more,
+    and an empty result must never be taken as "no switch matched": every
+    unmatched switch has its cubicle's relays deleted. Nothing in the model
+    has changed when this runs, so the project is recorded as failed and
+    left as it was.
 
     Args:
         all_switches: Callable returning the switches to describe.
@@ -639,22 +557,20 @@ def _start_matching(
     try:
         from ips_data import ex_switch_matching as esm
         switches = all_switches()
-        matching = esm.ProjectSwitchMatching(
-            app, prjt, setting_index, batch, record_lookups=(mode == "new")
-        )
+        matching = esm.ProjectSwitchMatching(app, prjt, setting_index, batch)
         matching.match(
             switches,
             switches if valid_switches is None else valid_switches,
             should_process,
         )
         return matching
-    except Exception:
-        logger.warning(
-            f"Switch matching failed (mode {mode}); this project uses the "
-            f"legacy name lookup",
+    except Exception as err:
+        logger.error(
+            "Switch matching failed; the project's transfer is stopped "
+            "before any device is changed",
             exc_info=True,
         )
-        return None
+        raise qd.TransferError(f"Switch matching failed: {err!r}") from err
 
 
 def _finish_matching(matching, write_log: bool) -> None:
@@ -669,43 +585,26 @@ def _match_one_switch(
     switch,
     list_of_devices: List[ProtectionDevice],
     late_devices: List[ProtectionDevice],
-    setting_index: SettingIndex,
     batch: bool,
-    cb_alt_name_list,
-    mode: str,
     matching,
-) -> Tuple[List[str], List[ProtectionDevice]]:
+) -> Tuple[Optional[List[str]], List[ProtectionDevice]]:
     """
-    Setting IDs and devices for one switch, by the configured mode.
+    Setting IDs and devices for one switch, from the matcher's records.
 
-    "new": the matcher's records. Devices for records the legacy lookup
-    would also have found go to list_of_devices; the others go to
-    late_devices, which the caller appends after the loop so they are
-    named last. A switch the matcher has no result for (it could not be
-    read) falls back to the legacy lookup.
-    "shadow"/"legacy": the legacy lookup; in shadow it is also compared.
+    Devices for records the old name lookup would also have found go to
+    list_of_devices; the others go to late_devices, which the caller
+    appends after the loop so they are named last.
+
+    Returns (None, list_of_devices) when the matcher has no result for the
+    switch (it could not be read); the caller then leaves the switch alone.
     """
-    records = None
-    if mode == "new" and matching is not None:
-        records = matching.records_for(switch)
-        if records is None:
-            logger.warning(
-                f"Switch matching: no result for '{switch.loc_name}'; legacy "
-                f"lookup used"
-            )
-
+    records = matching.records_for(switch)
     if records is None:
-        new_ids, list_of_devices = _get_setting_id_indexed(
-            app=app,
-            switch=switch,
-            list_of_devices=list_of_devices,
-            setting_index=setting_index,
-            batch=batch,
-            cb_alt_name_list=cb_alt_name_list,
+        logger.warning(
+            f"Switch matching: no result for '{switch.loc_name}' (it could "
+            f"not be read); switch skipped, its cubicle left unchanged"
         )
-        if mode == "shadow" and matching is not None:
-            matching.note_legacy(switch, new_ids)
-        return new_ids, list_of_devices
+        return None, list_of_devices
 
     setting_ids: List[str] = []
     for record in records:
@@ -717,51 +616,6 @@ def _match_one_switch(
                 late_devices.append(device)
             setting_ids.append(record.relaysettingid)
     return setting_ids, list_of_devices
-
-
-def _get_switch_info(switch, cb_alt_name_list: List[Dict]) -> Tuple[str, Optional[str]]:
-    """
-    Get switch name and substation code for lookup.
-
-    Args:
-        switch: The switch object
-        cb_alt_name_list: CB name mapping list
-
-    Returns:
-        Tuple of (switch_name, substation_code)
-    """
-    # Read the two names ONCE. The old loop read switch.fold_id.loc_name
-    # and switch.loc_name for every CB_ALT_NAME row - two PowerFactory
-    # calls per row per switch - which made the Energex switch loop take
-    # 7.4-8.0 min per project on 2026-10-03.
-    sub_name = switch.fold_id.loc_name
-    cb_name = switch.loc_name
-
-    if isinstance(cb_alt_name_list, dict):
-        new_name = cb_alt_name_list.get((sub_name, cb_name))
-    else:
-        new_name = next(
-            (d["NEW_NAME"] for d in cb_alt_name_list
-             if d["SUBSTATION"] == sub_name and d["CB_NAME"] == cb_name),
-            None,
-        )
-    pf_switch_name = new_name if new_name is not None else cb_name
-
-    # Extract base name (before underscore)
-    switch_name = pf_switch_name.split("_")[0]
-
-    # Get substation code for ElmCoup switches
-    sub_code = sub_name if switch.GetClassName() == "ElmCoup" else None
-
-    return switch_name, sub_code
-
-
-def cb_alt_name_index(cb_alt_name_list: List[Dict]) -> Dict[Tuple[str, str], str]:
-    """{(SUBSTATION, CB_NAME): NEW_NAME}; the first row wins, as the loop did."""
-    index: Dict[Tuple[str, str], str] = {}
-    for row in cb_alt_name_list:
-        index.setdefault((row.get("SUBSTATION"), row.get("CB_NAME")), row.get("NEW_NAME"))
-    return index
 
 
 def _create_device_from_record(

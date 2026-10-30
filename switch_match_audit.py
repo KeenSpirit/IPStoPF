@@ -129,7 +129,7 @@ def load_cb_alt_rows(path: Optional[str] = None) -> List[Dict[str, str]]:
 
 
 def cb_alt_index(rows: List[Dict[str, str]]) -> Dict[Tuple[str, str], str]:
-    """The lookup ex_settings builds: notes skipped, first row per key wins."""
+    """The CB_ALT_NAME lookup the matcher uses: notes skipped, first row per key wins."""
     index: Dict[Tuple[str, str], str] = {}
     for row in rows:
         if row.get("NEW_NAME", "").strip().lower() in CB_ALT_NOTES - {
@@ -203,7 +203,11 @@ def filter_reason(row: Dict[str, str]) -> str:
 # =============================================================================
 
 def legacy_ids(setting_index, row: Dict[str, str], cb_alt: Dict) -> List[str]:
-    """ex_settings._get_switch_info + _get_setting_id_indexed, offline."""
+    """
+    The old Energex name lookup (removed from ex_settings on 2026-10-30:
+    _get_switch_info + _get_setting_id_indexed), kept here for the
+    Changes vs legacy comparison.
+    """
     new_name = cb_alt.get((row.get("fold_id_name"), row.get("loc_name")))
     name = (new_name if new_name is not None else row.get("loc_name", "")).split("_")[0]
     sub_code = row.get("fold_id_name") if row.get("class") == "ElmCoup" else None
