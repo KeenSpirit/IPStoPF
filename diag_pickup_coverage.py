@@ -25,7 +25,10 @@ re-reads the IPS settings exactly as a run does and reports:
 
 Energex (SEQ) CSVs only. No PowerFactory needed; SELECTs against the ODS.
 
-    "C:\\Program Files\\Python312\\python.exe" diag_pickup_coverage.py "<run folder>\\dp072_SEQ_Models_Burleigh_Heads.csv"
+    "C:\\Program Files\\Python312\\python.exe" diag_pickup_coverage.py
+        (no argument: every dp072_SEQ_Models_*.csv in the ProtectionBatchRunner
+        output folder)
+    "C:\\Program Files\\Python312\\python.exe" diag_pickup_coverage.py "<folder>\\dp072_SEQ_Models_Burleigh_Heads.csv"
     "C:\\Program Files\\Python312\\python.exe" diag_pickup_coverage.py "<run folder>\\dp072_SEQ_Models_*.csv"
 """
 
@@ -34,6 +37,10 @@ import glob
 import os
 import sys
 import time
+
+# Captured before the project imports below, in case one of them (or a
+# library they pull in from the share) changes sys.argv.
+_ARGS = list(sys.argv[1:])
 import types
 from collections import Counter
 from contextlib import closing
@@ -46,9 +53,13 @@ from update_powerfactory import noja_function as nf
 from update_powerfactory import relay_settings as rs
 from update_powerfactory.setting_utils import build_setting_key
 
+RESULTS_DIR = r"C:\LocalData\PowerFactory Output Folders\ProtectionBatchRunner"
+# Used when no path is given on the command line: every SEQ project's
+# results CSV in the ProtectionBatchRunner output folder.
+DEFAULT_PATTERN = os.path.join(RESULTS_DIR, "dp072_SEQ_Models_*.csv")
+
 OUT_DIR = os.path.join(
-    r"C:\LocalData\PowerFactory Output Folders\ProtectionBatchRunner",
-    f"pickup_coverage_diag_{time.strftime('%Y%m%d_%H%M%S')}",
+    RESULTS_DIR, f"pickup_coverage_diag_{time.strftime('%Y%m%d_%H%M%S')}",
 )
 
 PREFIXES = ("switch_", "sect_")
@@ -100,10 +111,19 @@ def read_results(paths):
 
 
 def main(argv):
-    paths = sorted({p for arg in argv for p in glob.glob(arg)})
-    paths = [p for p in paths if "_SEQ_" in os.path.basename(p)]
+    args = [a.strip().strip('"') for a in argv if a.strip()] or [DEFAULT_PATTERN]
+    print(f"Arguments received: {args}")
+    found = set()
+    for arg in args:
+        matches = glob.glob(arg) or ([arg] if os.path.isfile(arg) else [])
+        print(f"  {arg}\n    -> {len(matches)} file(s)")
+        found.update(matches)
+    paths = sorted(p for p in found if "_SEQ_" in os.path.basename(p))
     if not paths:
-        sys.exit("Pass one or more dp072_SEQ_Models_<project>.csv paths (wildcards allowed)")
+        sys.exit(
+            "No SEQ results CSV found. Pass dp072_SEQ_Models_<project>.csv "
+            f"path(s) (wildcards allowed), or put them in {RESULTS_DIR}"
+        )
     devices = read_results(paths)
     os.makedirs(OUT_DIR, exist_ok=True)
     print(f"{len(devices)} devices in {len(paths)} project file(s)")
@@ -165,4 +185,4 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    main(_ARGS)
