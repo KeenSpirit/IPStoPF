@@ -31,6 +31,7 @@ from typing import Dict, List, Tuple, Optional, Any, Union
 
 from update_powerfactory import mapping_file as mf
 from update_powerfactory import noja_function as nf
+from update_powerfactory import pickup_coverage as pc
 from update_powerfactory import ct_settings as cs
 from update_powerfactory import vt_settings as vs
 from update_powerfactory.type_index import RelayTypeIndex
@@ -238,6 +239,23 @@ def relay_settings(
         result.result = no_protection
         return result, updates
 
+    # The mapping file reads pickups but IPS gave this relay none (see
+    # pickup_coverage). Rule A: IPS holds no protection settings (switch /
+    # sectionaliser device ID, or a pattern whose mapping is proven) - out of
+    # service, handled like the NOJA case above. Rule B: the mapping file
+    # does not read this IPS record - kept in service with model settings
+    # and reported, so SPA results for it can be discounted until the
+    # mapping file is fixed.
+    pickup_outcome = _pickup_outcome(
+        device_object, mapping_file, setting_dict, result
+    )
+    if pickup_outcome == pc.NO_PROTECTION_SETTINGS:
+        device_object.pf_obj.SetAttribute("outserv", 1)
+        result.result = pickup_outcome
+        return result, updates
+    if pickup_outcome == pc.PICKUPS_NOT_IN_IPS:
+        result.result = pickup_outcome
+
     # Delegate specialized configuration to sub-modules
     reclose_status = update_reclosing_logic(
         app, device_object, mapping_file, setting_dict
@@ -333,6 +351,70 @@ def _noja_protection_outcome(
             pf_device.loc_name, found, missing,
         )
     return outcome
+
+# Patterns already warned about under rule B this run (one warning each;
+# every relay is still logged at INFO and listed in the results CSV).
+_PICKUP_PATTERNS_WARNED: set = set()
+
+
+def _pickup_outcome(
+    device_object: Any,
+    mapping_file: List[List],
+    setting_dict: Dict[str, Any],
+    result: Any,
+) -> Optional[str]:
+    """
+    pickup_coverage result for the relay, or None.
+
+    None when an earlier step already recorded a result, when the relay has
+    no type (no elements to protect with), or when IPS gave it at least one
+    pickup. Otherwise pc.NO_PROTECTION_SETTINGS (rule A) or
+    pc.PICKUPS_NOT_IN_IPS (rule B).
+    """
+    if result.result:
+        return None
+    pf_device = device_object.pf_obj
+    try:
+        if pf_device.typ_id is None:
+            return None
+    except AttributeError:
+        return None
+
+    found, missing = pc.pickup_coverage(mapping_file, setting_dict)
+    outcome = pc.classify(
+        found, missing, device_object.device,
+        getattr(device_object, "device_id", None),
+    )
+    name = getattr(pf_device, "loc_name", device_object.name)
+    if outcome == pc.NO_PROTECTION_SETTINGS:
+        logger.info(
+            "%s: none of the %d pickup(s) the mapping file reads for %s "
+            "are in IPS (device ID %r, %d IPS parameter(s)); no protection "
+            "settings in IPS, relay placed out of service",
+            name, missing, device_object.device,
+            getattr(device_object, "device_id", ""),
+            len(device_object.settings or []),
+        )
+    elif outcome == pc.PICKUPS_NOT_IN_IPS:
+        logger.info(
+            "%s: none of the %d pickup(s) the mapping file reads for %s are "
+            "in its %d IPS parameter(s); model settings kept",
+            name, missing, device_object.device,
+            len(device_object.settings or []),
+        )
+        pattern = pc.base_pattern(device_object.device)
+        if pattern not in _PICKUP_PATTERNS_WARNED:
+            _PICKUP_PATTERNS_WARNED.add(pattern)
+            logger.warning(
+                "Mapping file for pattern %s reads no pickup from the IPS "
+                "record of %s; relay kept in service with model settings. "
+                "Check the pattern's mapping file in type_mapping.csv. "
+                "Reported once per pattern; every relay is in the results "
+                "CSV as '%s'.",
+                pattern, name, pc.PICKUPS_NOT_IN_IPS,
+            )
+    return outcome
+
 
 # =============================================================================
 # Device Classification
