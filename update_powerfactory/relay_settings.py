@@ -372,16 +372,34 @@ def update_device_function(device_object: Any) -> None:
         # No protection settings typically means it's a switch
         device_object.device = f"switch_{device_object.device}"
     else:
-        # Check if the device is a sectionaliser
-        for setting in device_object.settings:
-            if setting[1] in ["Sectionaliser"]:
-                if setting[2].lower() in ["on", "auto"]:
-                    device_object.device = f"sect_{device_object.device}"
-                break
-            if setting[1] in ["Detection"]:
-                if setting[2].lower() == "on":
-                    device_object.device = f"switch_{device_object.device}"
-                    break
+        function = settings_function(device_object.settings)
+        if function:
+            device_object.device = f"{function}_{device_object.device}"
+
+
+# IPS values that switch a controller's sectionaliser or detection-only
+# (fault indication) mode on.
+SECTIONALISER_ON = ("on", "auto")
+DETECTION_ON = ("on",)
+
+
+def settings_function(settings: List[List[Any]]) -> Optional[str]:
+    """'sect' or 'switch' when the IPS settings say the controller does not
+    protect, else None. Every Sectionaliser and Detection row is read."""
+    sectionaliser = detection = False
+    for setting in settings:
+        if len(setting) < 3:
+            continue
+        name, value = setting[1], str(setting[2] or "").strip().lower()
+        if name == "Sectionaliser" and value in SECTIONALISER_ON:
+            sectionaliser = True
+        elif name == "Detection" and value in DETECTION_ON:
+            detection = True
+    if sectionaliser:
+        return "sect"
+    if detection:
+        return "switch"
+    return None
 
 # =============================================================================
 # Relay Type Management
