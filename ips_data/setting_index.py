@@ -355,7 +355,7 @@ class SettingIndex:
         Records the new Energex switch matcher (mapping/switch_matcher.py)
         proposes for one switch, before project-wide claims are resolved.
 
-        In "new" switch-matching mode ex_switch_matching calls this for every
+        ex_switch_matching calls this for every
         processed switch, so the lookup is recorded and the incremental
         precheck can replay it, as it replays get_by_switch_name.
         """
