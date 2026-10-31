@@ -35,6 +35,7 @@ Energex (SEQ) CSVs only. No PowerFactory needed; SELECTs against the ODS.
 import csv
 import glob
 import os
+import re
 import sys
 import time
 
@@ -56,7 +57,7 @@ from update_powerfactory.setting_utils import build_setting_key
 RESULTS_DIR = r"C:\LocalData\PowerFactory Output Folders\ProtectionBatchRunner"
 # Used when no path is given on the command line: every SEQ project's
 # results CSV in the ProtectionBatchRunner output folder.
-DEFAULT_PATTERN = os.path.join(RESULTS_DIR, "dp072_SEQ_Models_*.csv")
+DEFAULT_PATTERN = os.path.join(RESULTS_DIR, "*SEQ*Models_*.csv")
 
 OUT_DIR = os.path.join(
     RESULTS_DIR, f"pickup_coverage_diag_{time.strftime('%Y%m%d_%H%M%S')}",
@@ -93,7 +94,7 @@ def pickup_coverage(mapping_rows, setting_dict):
 def read_results(paths):
     devices = []
     for path in paths:
-        project = os.path.basename(path).replace("dp072_SEQ_Models_", "").replace(".csv", "")
+        project = re.sub(r"^.*?SEQ[ _]Models_", "", os.path.basename(path))[:-4]
         with open(path, newline="", encoding="utf-8-sig") as f:
             for row in csv.DictReader(f):
                 if not row.get("SETTING_ID") or not row.get("PLANT_NUMBER"):
@@ -118,7 +119,10 @@ def main(argv):
         matches = glob.glob(arg) or ([arg] if os.path.isfile(arg) else [])
         print(f"  {arg}\n    -> {len(matches)} file(s)")
         found.update(matches)
-    paths = sorted(p for p in found if "_SEQ_" in os.path.basename(p))
+    # Run files are named "dp072_SEQ Models_<project>.csv" (spaces, not
+    # underscores); accept either.
+    paths = sorted(p for p in found
+                   if re.search(r"SEQ[ _]Models_", os.path.basename(p)))
     if not paths:
         sys.exit(
             "No SEQ results CSV found. Pass dp072_SEQ_Models_<project>.csv "
