@@ -3,10 +3,8 @@ Pickup-coverage check for every relay pattern (pure: no PowerFactory calls).
 
 A relay whose mapping file has pickup rows (Ipset / Ipsetr read from IPS)
 but none of them found in its IPS settings gets no pickup from IPS: its
-elements keep whatever the model held (200 A / 40 A on every in-service
-switch controller in Burleigh Heads, 28 Oct), and SPA grades those values.
-The SEQ fleet diagnostic of 31 Oct (diag_pickup_coverage.py, 37 projects)
-found 411 such relays in service. Two different causes:
+elements keep whatever the model held, and SPA grades those values.
+Two different causes:
 
 * Rule A - no protection settings in IPS. The IPS record holds detection,
   communications or nothing protection-related, so the device does not
@@ -14,17 +12,12 @@ found 411 such relays in service. Two different causes:
     - the IPS device ID marks a switch or sectionaliser (SW..., SE...), or
     - the pattern's mapping file is proven to read pickups on other relays
       (NO_PICKUP_MEANS_NO_PROTECTION), so finding none means IPS has none.
-  The relay is placed out of service (214 relays on 31 Oct, e.g. the
-  detection-only ADVC on X15402-C_SW780; 39-row stub records on
-  X1418180_RE1119 and X1628-D_RE922).
+  The relay is placed out of service.
 
 * Rule B - the mapping file does not read this IPS record (WSOS4_Energex,
   CAPM2, ADVC2 WSOS5 V5.13.26, SEL351 ...: no relay on these patterns gets
   a pickup). The relay is a real protection device; it stays in service
-  and is reported so the mapping file can be fixed (197 relays on 31 Oct).
-
-relay_settings does the PowerFactory part.
-Offline tests: update_powerfactory/test_pickup_coverage.py
+  and is reported so the mapping file can be fixed.
 """
 
 import re
@@ -44,14 +37,16 @@ PICKUP_ATTRIBUTES = frozenset({"Ipset", "Ipsetr"})
 # Column D values that make a mapping row a constant, not an IPS read.
 _CONSTANT_ROWS = frozenset({"ON", "On", "OFF", "Off", "None"})
 
-# Patterns whose mapping file reads pickups on other relays in the fleet
-# (31 Oct diagnostic: EQL_ADVC3 150 relays, ADVC PTCC 26, WSOS5_Energex 16).
+# Patterns whose mapping file reads pickups on other relays in the fleet.
 # For these, an IPS record with no pickup has no protection settings.
 # Add a pattern only once its mapping file is shown to read pickups.
 NO_PICKUP_MEANS_NO_PROTECTION = frozenset({
     "EQL_ADVC3_ADVC2_5.16",
     "ADVC PTCC",
     "WSOS5_Energex",
+    "WSOS4_Energex",
+    "CAPM2",
+    "ADVC2 WSOS5 V5.13.26",
 })
 
 # IPS device IDs of switches (SW780) and sectionalisers (SE2209).
@@ -80,13 +75,15 @@ def pickup_coverage(
 
     A row is 'found' when create_setting_dictionary stored a value for its
     key (an IPS OFF counts as found), 'missing' otherwise. Constant rows
-    are not counted.
+    are not counted. A row reading an IPS parameter that has no block path
+    has 'None' in column D (ADVC2 WSOS5 V5.13.26: IPS holds no block paths
+    for that pattern); the 'use_setting' marker makes it an IPS read.
     """
     found = missing = 0
     for line in mapping_file:
         if len(line) < 4 or line[2] not in PICKUP_ATTRIBUTES:
             continue
-        if line[3] in _CONSTANT_ROWS:
+        if line[3] in _CONSTANT_ROWS and "use_setting" not in line[4:]:
             continue
         if build_setting_key(line) in setting_dict:
             found += 1

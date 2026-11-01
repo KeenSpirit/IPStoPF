@@ -79,16 +79,13 @@ def _function(settings):
 
 
 def pickup_coverage(mapping_rows, setting_dict):
-    """(found, missing) over the mapping rows that set a pickup from IPS."""
-    found = missing = 0
-    for line in mapping_rows:
-        if len(line) < 4 or line[2] not in rs.PICKUP_ATTRIBUTES or line[3] in CONSTANT:
-            continue
-        if build_setting_key(line) in setting_dict:
-            found += 1
-        else:
-            missing += 1
-    return found, missing
+    """(found, missing) over the mapping rows that set a pickup from IPS.
+
+    Same count as the deployed check (update_powerfactory.pickup_coverage),
+    so the diagnostic and a run agree.
+    """
+    from update_powerfactory import pickup_coverage as pc
+    return pc.pickup_coverage(mapping_rows, setting_dict)
 
 
 def read_results(paths):
@@ -160,8 +157,14 @@ def main(argv):
                 pf, pm = pickup_coverage(rows, sdict)
                 of, om = nf.trip_map_coverage(rows, sdict)
                 rec.update(pickup_found=pf, pickup_missing=pm, outserv_found=of, outserv_missing=om)
-                if pm and not pf:
-                    rec["rule"] = "OUT OF SERVICE (no pickup in IPS)"
+                from update_powerfactory import pickup_coverage as pc
+                id_match = re.search(r"_((?:SW|SE)\d+)$", d["name"], re.IGNORECASE)
+                outcome = pc.classify(pf, pm, d["pattern"],
+                                      id_match.group(1) if id_match else "")
+                if outcome == pc.NO_PROTECTION_SETTINGS:
+                    rec["rule"] = "A: out of service (no protection settings in IPS)"
+                elif outcome == pc.PICKUPS_NOT_IN_IPS:
+                    rec["rule"] = "B: kept, mapping reads no pickup"
                 elif not pm and not pf:
                     rec["rule"] = "no pickup rows in mapping"
                 else:
@@ -174,15 +177,21 @@ def main(argv):
         w.writeheader()
         w.writerows(out)
 
-    newly_oos = [r for r in out if r["rule"].startswith("OUT")]
+    newly_oos = [r for r in out if r["run_result"] == "in service"
+                 and r["rule"].startswith("A:")]
+    rule_b = [r for r in out if r["run_result"] == "in service"
+              and r["rule"].startswith("B:")]
     newly_switch = [r for r in out if r["run_result"] == "in service"
                     and r["decision"] in ("switch", "sect")]
     print(f"\nWould change from in service with the Step 2 fix (Sectionaliser/Detection): {len(newly_switch)}")
-    print(f"Would go out of service under the no-pickup rule: {len(newly_oos)}")
+    print(f"Rule A, out of service (no protection settings in IPS): {len(newly_oos)}")
     for (pattern, suffix), n in Counter(
         (r["pattern"], r["name"].split("_")[-1][:2]) for r in newly_oos
     ).most_common():
         print(f"    {n:4}  {pattern}  (device ID {suffix}..)")
+    print(f"Rule B, kept in service (mapping reads no pickup): {len(rule_b)}")
+    for pattern, n in Counter(r["pattern"] for r in rule_b).most_common():
+        print(f"    {n:4}  {pattern}")
     partial = [r for r in out if r["rule"] == "unchanged" and r["pickup_missing"]]
     print(f"Pickups partly found (left as they are, listed in the CSV): {len(partial)}")
     print(f"Output: {OUT_DIR}")
