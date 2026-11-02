@@ -76,6 +76,7 @@ DEFAULT_DEVICES = {
     "QMRSRA2_J05B": "64305322-D448-476A-A878-895D07C9AE64",
 }
 
+
 _GUID = re.compile(r"^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$")
 
 
