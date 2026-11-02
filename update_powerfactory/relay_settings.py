@@ -216,6 +216,9 @@ def relay_settings(
         setting_dict = create_setting_dictionary(
             app, device_object.settings, mapping_file, device_object.pf_obj
         )
+        setting_dict = fallback_param_set(
+            app, device_object, mapping_file, setting_dict
+        )
         result.date_setting = device_object.date
         device_object.pf_obj.SetAttribute("e:sernum", str(device_object.date))
     else:
@@ -255,6 +258,13 @@ def relay_settings(
         return result, updates
     if pickup_outcome == pc.PICKUPS_NOT_IN_IPS:
         result.result = pickup_outcome
+
+    # Pilot-wire / line-differential relays with no overcurrent element left
+    # in service: unit protection only, nothing SPA can grade.
+    if _unit_protection_only(device_object):
+        device_object.pf_obj.SetAttribute("outserv", 1)
+        result.result = pc.UNIT_PROTECTION_ONLY
+        return result, updates
 
     # Delegate specialized configuration to sub-modules
     reclose_status = update_reclosing_logic(
@@ -351,6 +361,76 @@ def _noja_protection_outcome(
             pf_device.loc_name, found, missing,
         )
     return outcome
+
+def fallback_param_set(
+    app: Any,
+    device_object: Any,
+    mapping_file: List[List],
+    setting_dict: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Setting dictionary from another IPS parameter set when the chosen one
+    gives none of the pickups the mapping file reads.
+
+    ProtectionDevice picks the most recent field set. Some field sets are
+    partial read-backs (an 'As Applied' import holding comms and status
+    values but not the protection settings) while an older set holds the
+    full settings. Then the most preferred other set that gives at least
+    one pickup is used, and device_object.settings is switched to it.
+    Switch / sectionaliser device IDs are left alone: their older sets can
+    hold a configuration the switchgear cannot perform.
+
+    Returns setting_dict unchanged when no other set does better.
+    """
+    found, missing = pc.pickup_coverage(mapping_file, setting_dict)
+    if found or not missing:
+        return setting_dict
+    if pc.is_switch_device_id(getattr(device_object, "device_id", None)):
+        return setting_dict
+    alternates = getattr(device_object, "alternate_param_sets", None)
+    if not callable(alternates):
+        return setting_dict
+    for label, settings in alternates():
+        alt = create_setting_dictionary(
+            app, settings, mapping_file, device_object.pf_obj
+        )
+        alt_found, _ = pc.pickup_coverage(mapping_file, alt)
+        if alt_found:
+            logger.warning(
+                "%s: parameter set %s gives none of the %d pickup(s) the "
+                "mapping file reads; using %s, which gives %d",
+                getattr(device_object.pf_obj, "loc_name", device_object.name),
+                device_object.chosen_param_set() or "(chosen)", missing,
+                label, alt_found,
+            )
+            device_object.settings = settings
+            device_object.param_set_fallback = label
+            return alt
+    return setting_dict
+
+
+def _unit_protection_only(device_object: Any) -> bool:
+    """
+    True for a unit-protection pattern whose relay has no overcurrent
+    element in service after its settings were applied.
+    """
+    if not pc.is_unit_protection(device_object.device):
+        return False
+    pf_device = device_object.pf_obj
+    try:
+        if pf_device.typ_id is None:
+            return False
+    except AttributeError:
+        return False
+    if _live_protection_elements(pf_device):
+        return False
+    logger.info(
+        "%s: unit protection (%s) with no overcurrent element in service; "
+        "placed out of service",
+        getattr(pf_device, "loc_name", device_object.name), device_object.device,
+    )
+    return True
+
 
 # Patterns already warned about under rule B this run (one warning each;
 # every relay is still logged at INFO and listed in the results CSV).

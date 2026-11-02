@@ -26,9 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from update_powerfactory.setting_utils import build_setting_key
 
 # Result strings (UpdateResult.result).
-NO_PROTECTION_SETTINGS = (
-    "No protection settings in IPS (detection only) - placed out of service"
-)
+NO_PROTECTION_SETTINGS = "No protection settings in IPS - placed out of service"
 PICKUPS_NOT_IN_IPS = "No pickups found in IPS - model settings kept"
 
 # PF attributes that hold a pickup. Mirrors relay_settings.PICKUP_ATTRIBUTES.
@@ -46,8 +44,33 @@ NO_PICKUP_MEANS_NO_PROTECTION = frozenset({
     "WSOS5_Energex",
     "WSOS4_Energex",
     "CAPM2",
+    "CAPM2_Energex",
     "ADVC2 WSOS5 V5.13.26",
+    "ARGUS1 Compatibility_Energex",
+    "ARGUS1 ReyDisp Evolution v6.4t.3.4_Energex",
+    "P123 V13 V14 HEX",
+    "P123_Energex",
+    "P142 430J 43?J 440J 460J 46?J 468J 469J 500J_obsolete",
+    "P142 090B 100B 150A 150C 170C 210G 300J",
+    "RED615 2.6 - 2.12",
+    "EQL_RC10_RC20",
+    "SEL351-6 SEL5010_Energex",
+    "SEL351A - SEL-5030_Energex",
 })
+
+# Unit protection (pilot wire / line differential relays). Their
+# differential function does not take part in overcurrent grading; one with
+# no overcurrent element left in service after its IPS settings are applied
+# protects nothing SPA can assess and is placed out of service. One with an
+# overcurrent element in service stays in.
+UNIT_PROTECTION_PATTERNS = frozenset({
+    "SOLKOR-RF_Energex",
+    "7PG21 (SOLKOR-RF)",
+    "SOLKOR-N_Energex",
+    "7SG18 (SOLKOR-N)",
+})
+
+UNIT_PROTECTION_ONLY = "Unit protection only - placed out of service"
 
 # IPS device IDs of switches (SW780) and sectionalisers (SE2209).
 _SWITCH_DEVICE_ID = re.compile(r"^(SW|SE)\d", re.IGNORECASE)
@@ -90,6 +113,11 @@ def pickup_coverage(
         else:
             missing += 1
     return found, missing
+
+
+def is_unit_protection(pattern: Optional[str]) -> bool:
+    """True for a pilot-wire / line-differential pattern."""
+    return base_pattern(pattern) in UNIT_PROTECTION_PATTERNS
 
 
 def classify(

@@ -127,12 +127,7 @@ class ProtectionDevice:
         rows = self._select_param_set(all_settings.get(self.setting_id, []))
         rows = self._one_row_per_parameter(rows)
         for row in rows:
-            setting = [
-                row.get("blockpathenu", ""),
-                row.get("paramnameenu", ""),
-                row.get("proposedsetting", ""),
-                row.get("unitenu", ""),
-            ]
+            setting = _setting_row(row)
             self.settings.append(setting)
 
             # Extract CT ratios from settings
@@ -168,6 +163,7 @@ class ProtectionDevice:
             })
             info["rows"].append(row)
 
+        self._alternate_sets = []
         if len(sets) <= 1:
             only = next(iter(sets.values()), None)
             if only and only["reader"] in UNTRUSTED_READERS:
@@ -188,10 +184,24 @@ class ProtectionDevice:
         # Applied' with both undated (Beenleigh 2026-10-03). Ties now prefer
         # a field set (Applied / As Left / As Found) over an Issued one,
         # then the set id, so the choice no longer depends on row order.
-        chosen = max(
-            trusted,
-            key=lambda k: (str(trusted[k]["date"] or ""),
-                           _set_name_rank(trusted[k]["name"]), str(k)),
+        def preference(k):
+            return (str(sets[k]["date"] or ""),
+                    _set_name_rank(sets[k]["name"]), str(k))
+
+        chosen = max(trusted, key=preference)
+        # The other sets, most preferred first (trusted before untrusted),
+        # for alternate_param_sets().
+        self._alternate_sets = [
+            (f"'{sets[k]['name']}' ({sets[k]['reader']}, {sets[k]['date']})",
+             sets[k]["rows"])
+            for k in sorted(
+                (k for k in sets if k != chosen),
+                key=lambda k: (k in trusted, preference(k)), reverse=True,
+            )
+        ]
+        self._chosen_set_label = (
+            f"'{sets[chosen]['name']}' ({sets[chosen]['reader']}, "
+            f"{sets[chosen]['date']})"
         )
 
         used = {
@@ -215,6 +225,25 @@ class ProtectionDevice:
             len(only_elsewhere),
         )
         return sets[chosen]["rows"]
+
+    def alternate_param_sets(self) -> List[tuple]:
+        """
+        (label, settings) for every IPS parameter set not chosen, most
+        preferred first. Empty when the setting has a single set.
+
+        Used by relay_settings when the chosen set gives none of the
+        pickups the mapping file reads (e.g. an 'As Applied' read-back that
+        holds only part of the relay's parameters while 'As Issued' holds
+        them all). CT ratios are not re-read from the alternate set.
+        """
+        return [
+            (label, [_setting_row(r) for r in self._one_row_per_parameter(rows)])
+            for label, rows in getattr(self, "_alternate_sets", [])
+        ]
+
+    def chosen_param_set(self) -> str:
+        """Label of the parameter set the settings came from ('' if one)."""
+        return getattr(self, "_chosen_set_label", "")
 
     def _one_row_per_parameter(self, rows: List[Dict]) -> List[Dict]:
         """
@@ -363,6 +392,16 @@ class ProtectionDevice:
     def __str__(self) -> str:
         """String representation."""
         return f"{self.name} ({self.device})"
+
+
+def _setting_row(row: Dict) -> List[Any]:
+    """[block path, parameter, value, unit] from an IPS setting row."""
+    return [
+        row.get("blockpathenu", ""),
+        row.get("paramnameenu", ""),
+        row.get("proposedsetting", ""),
+        row.get("unitenu", ""),
+    ]
 
 
 def _set_name_rank(name: str) -> int:
