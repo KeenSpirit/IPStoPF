@@ -1,431 +1,140 @@
 """
-Protection device domain model.
+Pickup-coverage check for every relay pattern (pure: no PowerFactory calls).
 
-This module contains the ProtectionDevice class which represents a
-protection relay or fuse device with its associated IPS settings.
+A relay whose mapping file has pickup rows (Ipset / Ipsetr read from IPS)
+but none of them found in its IPS settings gets no pickup from IPS: its
+elements keep whatever the model held, and SPA grades those values.
+Two different causes:
 
-The ProtectionDevice class is the primary data transfer object between
-the IPS data retrieval layer and the PowerFactory update layer.
+* Rule A - no protection settings in IPS. The IPS record holds detection,
+  communications or nothing protection-related, so the device does not
+  protect. Recognised when either
+    - the IPS device ID marks a switch or sectionaliser (SW..., SE...), or
+    - the pattern's mapping file is proven to read pickups on other relays
+      (NO_PICKUP_MEANS_NO_PROTECTION), so finding none means IPS has none.
+  The relay is placed out of service.
+
+* Rule B - the mapping file does not read this IPS record (WSOS4_Energex,
+  CAPM2, ADVC2 WSOS5 V5.13.26, SEL351 ...: no relay on these patterns gets
+  a pickup). The relay is a real protection device; it stays in service
+  and is reported so the mapping file can be fixed.
 """
 
-from typing import Any, Dict, List, Optional
+import re
+from typing import Any, Dict, List, Optional, Tuple
 
-from core import instrument_selection as isel
-from logging_config import get_logger
+from update_powerfactory.setting_utils import build_setting_key
 
-logger = get_logger(__name__)
+# Result strings (UpdateResult.result).
+NO_PROTECTION_SETTINGS = "No protection settings in IPS - placed out of service"
+PICKUPS_NOT_IN_IPS = "No pickups found in IPS - model settings kept"
 
-# IPS readers whose imports are known to be wrong. ALSTOM Modbus
-# (native SET) imports every upper-case YES/NO parameter inverted on
-# P123s. A set from one of these
-# readers is only used when it is the only set on the setting.
-UNTRUSTED_READERS = ("ALSTOM Modbus (native SET)",)
+# PF attributes that hold a pickup. Mirrors relay_settings.PICKUP_ATTRIBUTES.
+PICKUP_ATTRIBUTES = frozenset({"Ipset", "Ipsetr"})
+
+# Column D values that make a mapping row a constant, not an IPS read.
+_CONSTANT_ROWS = frozenset({"ON", "On", "OFF", "Off", "None"})
+
+# Patterns whose mapping file reads pickups on other relays in the fleet.
+# For these, an IPS record with no pickup has no protection settings.
+# Add a pattern only once its mapping file is shown to read pickups.
+NO_PICKUP_MEANS_NO_PROTECTION = frozenset({
+    "EQL_ADVC3_ADVC2_5.16",
+    "ADVC PTCC",
+    "WSOS5_Energex",
+    "WSOS4_Energex",
+    "CAPM2",
+    "CAPM2_Energex",
+    "ADVC2 WSOS5 V5.13.26",
+    "ARGUS1 Compatibility_Energex",
+    "ARGUS1 ReyDisp Evolution v6.4t.3.4_Energex",
+    "P123 V13 V14 HEX",
+    "P123_Energex",
+    "P142 430J 43?J 440J 460J 46?J 468J 469J 500J_obsolete",
+    "P142 090B 100B 150A 150C 170C 210G 300J",
+    "RED615 2.6 - 2.12",
+    "EQL_RC10_RC20",
+    "SEL351-6 SEL5010_Energex",
+    "SEL351A - SEL-5030_Energex",
+})
+
+# Unit protection (pilot wire / line differential relays). Their
+# differential function does not take part in overcurrent grading; one with
+# no overcurrent element left in service after its IPS settings are applied
+# protects nothing SPA can assess and is placed out of service. One with an
+# overcurrent element in service stays in.
+UNIT_PROTECTION_PATTERNS = frozenset({
+    "SOLKOR-RF_Energex",
+    "7PG21 (SOLKOR-RF)",
+    "SOLKOR-N_Energex",
+    "7SG18 (SOLKOR-N)",
+})
+
+UNIT_PROTECTION_ONLY = "Unit protection only - placed out of service"
+
+# IPS device IDs of switches (SW780) and sectionalisers (SE2209).
+_SWITCH_DEVICE_ID = re.compile(r"^(SW|SE)\d", re.IGNORECASE)
 
 
-class ProtectionDevice:
+def base_pattern(pattern: Optional[str]) -> str:
+    """IPS pattern without the swer_ prefix or surrounding spaces."""
+    pattern = (pattern or "").strip()
+    if pattern.startswith("swer_"):
+        pattern = pattern[len("swer_"):]
+    return pattern.strip()
+
+
+def is_switch_device_id(device_id: Optional[str]) -> bool:
+    """True for an IPS device ID of a switch or sectionaliser."""
+    return bool(_SWITCH_DEVICE_ID.match((device_id or "").strip()))
+
+
+def pickup_coverage(
+    mapping_file: List[List[str]],
+    setting_dict: Dict[str, Any],
+) -> Tuple[int, int]:
     """
-    Represents a protection device with its IPS settings.
+    (found, missing) over the mapping rows that set a pickup from IPS.
 
-    Each protection device (relay or fuse) will have its own object
-    containing IPS data for use in configuring the device in PowerFactory.
-
-    Attributes:
-        app: PowerFactory application object
-        device: Device/relay pattern name from IPS
-        device_id: Device identifier from IPS
-        name: Device name
-        setting_id: IPS relay setting ID
-        date: Setting date from IPS
-        pf_obj: PowerFactory device object
-        ct_primary: CT primary current (amps)
-        ct_secondary: CT secondary current (amps)
-        vt_primary: VT primary voltage (volts)
-        vt_secondary: VT secondary voltage (volts)
-        ct_op_id: CT operation ID
-        vt_op_id: VT operation ID
-        multiple: Whether device has multiple settings
-        fuse_type: Fuse type (for fuse devices)
-        fuse_size: Fuse size (for fuse devices)
-        settings: List of associated settings
-
-    Example:
-        >>> device = ProtectionDevice(
-        ...     app=app,
-        ...     device="CAPM4 CAPM5",
-        ...     name="RC-12345",
-        ...     setting_id="SET001",
-        ...     date="2024-01-15",
-        ...     pf_obj=pf_relay,
-        ...     device_id="DEV001"
-        ... )
-        >>> device.associated_settings(all_settings)
-        >>> print(device.ct_primary)
-        600
+    A row is 'found' when create_setting_dictionary stored a value for its
+    key (an IPS OFF counts as found), 'missing' otherwise. Constant rows
+    are not counted. A row reading an IPS parameter that has no block path
+    has 'None' in column D (ADVC2 WSOS5 V5.13.26: IPS holds no block paths
+    for that pattern); the 'use_setting' marker makes it an IPS read.
     """
-
-    def __init__(
-            self,
-            app: Any,
-            device: str,
-            name: str,
-            setting_id: str,
-            date: Optional[str],
-            pf_obj: Any,
-            device_id: str,
-            *args,
-            **kwargs
-    ):
-        """
-        Initialize a ProtectionDevice.
-
-        Args:
-            app: PowerFactory application object
-            device: Device/relay pattern name from IPS
-            name: Device name
-            setting_id: IPS relay setting ID
-            date: Setting date from IPS
-            pf_obj: PowerFactory device object
-            device_id: Device identifier from IPS
-        """
-        self.app = app
-        self.device = device
-        self.device_id = device_id
-        self.name = name
-        self.setting_id = setting_id
-        self.date = date
-        self.pf_obj = pf_obj
-        self.ct_primary = 1
-        self.ct_secondary = 1
-        self.vt_primary = 1
-        self.vt_secondary = 1
-        self.ct_op_id = str()
-        self.vt_op_id = str()
-        self.multiple = False
-        self.fuse_type = None
-        self.fuse_size = None
-        self.settings: List[List[str]] = []
-        # CT ratio programmed in the relay's own settings (0120/0121 etc.),
-        # used to pick the right IPS transformer when several are linked.
-        self._setting_ct_primary: Optional[int] = None
-        self._setting_ct_secondary: Optional[int] = None
-
-    def associated_settings(self, all_settings: Dict[str, List[Dict]]) -> None:
-        """
-        Extract all settings associated with this protection device.
-
-        Goes through the full list of settings and determines all settings
-        associated with this protection device. Also extracts CT ratio
-        information from the settings.
-
-        Args:
-            all_settings: Dictionary mapping setting IDs to list of setting rows
-        """
-        self.settings = []
-        if not self.setting_id:
-            return
-
-        rows = self._select_param_set(all_settings.get(self.setting_id, []))
-        rows = self._one_row_per_parameter(rows)
-        for row in rows:
-            setting = _setting_row(row)
-            self.settings.append(setting)
-
-            # Extract CT ratios from settings
-            try:
-                param_name = str(row.get("paramnameenu", ""))
-                if param_name in ["0120", "Iprim", "0A07"]:
-                    self.ct_primary = int(float(row["proposedsetting"]))
-                    self._setting_ct_primary = self.ct_primary
-                elif param_name in ["0121", "In", "0A08"]:
-                    self.ct_secondary = int(float(row["proposedsetting"]))
-                    self._setting_ct_secondary = self.ct_secondary
-            except (ValueError, KeyError, TypeError):
-                pass
-
-    def _select_param_set(self, rows: List[Dict]) -> List[Dict]:
-        """
-        Keep the rows of one IPS parameter set.
-
-        A setting can hold several parameter sets (e.g. "As Issued" and
-        "As Applied", or a template and its "AsLeft" read-back), each a
-        full copy of the relay's parameters. Sets from UNTRUSTED_READERS
-        are dropped when another set exists; of the rest, the most
-        recently imported set is used. Rows without a relayparamsetid
-        (NetDash fallback) are returned unchanged.
-        """
-        sets: Dict[Any, Dict[str, Any]] = {}
-        for row in rows:
-            info = sets.setdefault(row.get("relayparamsetid"), {
-                "rows": [],
-                "reader": row.get("readername") or "",
-                "date": row.get("dateimportrelay"),
-                "name": row.get("setname") or "",
-            })
-            info["rows"].append(row)
-
-        self._alternate_sets = []
-        if len(sets) <= 1:
-            only = next(iter(sets.values()), None)
-            if only and only["reader"] in UNTRUSTED_READERS:
-                logger.warning(
-                    "%s: the only IPS parameter set on setting %s ('%s') "
-                    "was imported by %s, whose YES/NO values are known to "
-                    "be inverted; used as-is.",
-                    self.name, self.setting_id, only["name"], only["reader"],
-                )
-            return rows
-
-        trusted = {
-            k: v for k, v in sets.items()
-            if v["reader"] not in UNTRUSTED_READERS
-        } or sets
-        # Latest import wins. On equal (or missing) dates the old max() kept
-        # whichever set came first - X8662-B used 'As Issued' over 'As
-        # Applied' with both undated (Beenleigh 2026-10-03). Ties now prefer
-        # a field set (Applied / As Left / As Found) over an Issued one,
-        # then the set id, so the choice no longer depends on row order.
-        def preference(k):
-            return (str(sets[k]["date"] or ""),
-                    _set_name_rank(sets[k]["name"]), str(k))
-
-        chosen = max(trusted, key=preference)
-        # The other sets, most preferred first (trusted before untrusted),
-        # for alternate_param_sets().
-        self._alternate_sets = [
-            (f"'{sets[k]['name']}' ({sets[k]['reader']}, {sets[k]['date']})",
-             sets[k]["rows"])
-            for k in sorted(
-                (k for k in sets if k != chosen),
-                key=lambda k: (k in trusted, preference(k)), reverse=True,
-            )
-        ]
-        self._chosen_set_label = (
-            f"'{sets[chosen]['name']}' ({sets[chosen]['reader']}, "
-            f"{sets[chosen]['date']})"
-        )
-
-        used = {
-            (r.get("blockpathenu"), r.get("paramnameenu"))
-            for r in sets[chosen]["rows"]
-        }
-        only_elsewhere = {
-            (r.get("blockpathenu"), r.get("paramnameenu"))
-            for k, v in sets.items() if k != chosen for r in v["rows"]
-        } - used
-        logger.info(
-            "%s: %d IPS parameter sets on setting %s; using '%s' (%s, %s). "
-            "Not used: %s. %d parameter(s) exist only in the unused set(s) "
-            "and are not written.",
-            self.name, len(sets), self.setting_id,
-            sets[chosen]["name"], sets[chosen]["reader"], sets[chosen]["date"],
-            "; ".join(
-                f"'{v['name']}' ({v['reader']}, {v['date']})"
-                for k, v in sets.items() if k != chosen
-            ),
-            len(only_elsewhere),
-        )
-        return sets[chosen]["rows"]
-
-    def alternate_param_sets(self) -> List[tuple]:
-        """
-        (label, settings) for every IPS parameter set not chosen, most
-        preferred first. Empty when the setting has a single set.
-
-        Used by relay_settings when the chosen set gives none of the
-        pickups the mapping file reads (e.g. an 'As Applied' read-back that
-        holds only part of the relay's parameters while 'As Issued' holds
-        them all). CT ratios are not re-read from the alternate set.
-        """
-        return [
-            (label, [_setting_row(r) for r in self._one_row_per_parameter(rows)])
-            for label, rows in getattr(self, "_alternate_sets", [])
-        ]
-
-    def chosen_param_set(self) -> str:
-        """Label of the parameter set the settings came from ('' if one)."""
-        return getattr(self, "_chosen_set_label", "")
-
-    def _one_row_per_parameter(self, rows: List[Dict]) -> List[Dict]:
-        """
-        Keep one row per (block path, parameter) within a parameter set.
-
-        A pattern can hold two parameter models with the same block path
-        and name (e.g. ADVC "Radio Supply" and "Radio Supply.[2]"). The
-        row with the lowest model sort order is kept.
-        """
-        best: Dict[tuple, Dict] = {}
-        for row in rows:
-            key = (row.get("blockpathenu", ""), row.get("paramnameenu", ""))
-            current = best.get(key)
-            if current is None or _sort_value(row) < _sort_value(current):
-                best[key] = row
-        return list(best.values())
-
-    def seq_instrument_attributes(self, all_settings: List[Any]) -> None:
-        """
-        Extract instrument transformer attributes for SEQ (Energex) region.
-
-        Uses the setting ID to associate CT or VT attributes to the relay.
-
-        Args:
-            all_settings: List of setting records with instrument attributes
-        """
-        rows = []
-        for row in all_settings:
-            if getattr(row, "relaysettingid", None) != self.setting_id:
-                continue
-            self.ct_settingid = row.relaysettingid
-            rows.append((getattr(row, "nameenu", ""),
-                         getattr(row, "actualvalue", None)))
-        if not rows:
-            return
-
-        groups = isel.group_energex_rows(rows)
-        ct = isel.choose_indexed(groups["ct"], self._setting_ct_primary)
-        self._apply_ct_choice(ct, relay_setting_wins_if_larger=True)
-        vt = isel.choose_indexed(groups["vt"])
-        self._apply_vt_choice(vt)
-
-    def reg_instrument_attributes(self, all_settings: List[Any]) -> None:
-        """
-        Extract instrument transformer attributes for Regional (Ergon) region.
-
-        Uses the setting ID to associate CT or VT attributes to the relay.
-
-        Args:
-            all_settings: List of setting records with instrument attributes
-        """
-        found = {"CT Primary": [], "CT Secondary": [],
-                 "VT Primary": [], "VT Secondary": []}
-        for row in all_settings:
-            if getattr(row, "relaysettingid", None) != self.setting_id:
-                continue
-            self.ct_settingid = row.relaysettingid
-            param = str(getattr(row, "paramnameenu", "") or "")
-            for key, values in found.items():
-                if key in param:
-                    values.append(getattr(row, "setting", None))
-                    break
-
-        ct = isel.choose_unindexed(
-            found["CT Primary"], found["CT Secondary"], self._setting_ct_primary
-        )
-        self._apply_ct_choice(ct, relay_setting_wins_if_larger=False)
-        vt = isel.choose_unindexed(found["VT Primary"], found["VT Secondary"])
-        self._apply_vt_choice(vt)
-
-    # ------------------------------------------------------------------
-    # Instrument transformer selection (see core.instrument_selection)
-    # ------------------------------------------------------------------
-
-    def _apply_ct_choice(
-        self, choice: "isel.TxChoice", relay_setting_wins_if_larger: bool
-    ) -> None:
-        """
-        Store the chosen CT, keeping primary and secondary from ONE transformer.
-
-        Energex precedence is unchanged: a CT primary programmed in the relay
-        settings that is larger than every IPS transformer is kept (the old
-        'IT value only if larger' rule); otherwise the IPS pair is used.
-        Values stay integers as before. A fractional secondary (2.89 A /
-        0.577 A interposing CTs) is now ROUNDED to the nearest amp, floored
-        at 1 (int() truncated 2.89 to 2 and 0.577 to 0), and logged; see
-        isel.secondary_as_int.
-        """
-        for note in choice.notes:
-            logger.warning(f"{self.name}: CT selection: {note}")
-        if not choice.found:
-            if choice.secondary is not None and self._setting_ct_secondary is None:
-                self.ct_secondary = isel.secondary_as_int(choice.secondary)
-            return
-
-        if (relay_setting_wins_if_larger
-                and self._setting_ct_primary is not None
-                and self._setting_ct_primary > choice.primary):
-            logger.info(
-                f"{self.name}: relay settings carry CT primary "
-                f"{self._setting_ct_primary}, larger than every IPS CT "
-                f"{choice.candidates}; relay setting kept"
-            )
-            return
-
-        self.ct_primary = _as_int(choice.primary, self.ct_primary)
-        if choice.secondary is not None:
-            whole = isel.secondary_as_int(choice.secondary)
-            if choice.secondary != whole:
-                logger.warning(
-                    f"{self.name}: CT secondary {choice.secondary:g} A is not "
-                    f"a whole number; {whole} A used (PowerFactory CT data is "
-                    f"written as whole amps)"
-                )
-            self.ct_secondary = whole
-
-    def _apply_vt_choice(self, choice: "isel.TxChoice") -> None:
-        for note in choice.notes:
-            logger.warning(f"{self.name}: VT selection: {note}")
-        if choice.primary is not None:
-            self.vt_primary = _as_int(choice.primary, self.vt_primary)
-        if choice.secondary is not None:
-            self.vt_secondary = _as_int(choice.secondary, self.vt_secondary)
-
-    @property
-    def ct_ratio(self) -> float:
-        """Calculate CT ratio (primary / secondary)."""
-        if self.ct_secondary == 0:
-            return 1.0
-        return self.ct_primary / self.ct_secondary
-
-    @property
-    def vt_ratio(self) -> float:
-        """Calculate VT ratio (primary / secondary)."""
-        if self.vt_secondary == 0:
-            return 1.0
-        return self.vt_primary / self.vt_secondary
-
-    def __repr__(self) -> str:
-        """Detailed representation for debugging."""
-        return (
-            f"ProtectionDevice(name={self.name!r}, device={self.device!r}, "
-            f"setting_id={self.setting_id!r})"
-        )
-
-    def __str__(self) -> str:
-        """String representation."""
-        return f"{self.name} ({self.device})"
+    found = missing = 0
+    for line in mapping_file:
+        if len(line) < 4 or line[2] not in PICKUP_ATTRIBUTES:
+            continue
+        if line[3] in _CONSTANT_ROWS and "use_setting" not in line[4:]:
+            continue
+        if build_setting_key(line) in setting_dict:
+            found += 1
+        else:
+            missing += 1
+    return found, missing
 
 
-def _setting_row(row: Dict) -> List[Any]:
-    """[block path, parameter, value, unit] from an IPS setting row."""
-    return [
-        row.get("blockpathenu", ""),
-        row.get("paramnameenu", ""),
-        row.get("proposedsetting", ""),
-        row.get("unitenu", ""),
-    ]
+def is_unit_protection(pattern: Optional[str]) -> bool:
+    """True for a pilot-wire / line-differential pattern."""
+    return base_pattern(pattern) in UNIT_PROTECTION_PATTERNS
 
 
-def _set_name_rank(name: str) -> int:
-    """Tie-break rank of an IPS parameter-set name: field > other > issued."""
-    text = str(name or "").lower().replace("_", " ")
-    compact = text.replace(" ", "")
-    if "applied" in text or "asleft" in compact or "asfound" in compact:
-        return 2
-    if "issued" in text:
-        return 0
-    return 1
-
-
-def _as_int(value: Any, default: int) -> int:
-    """int(float(value)) as the old code did; default when not numeric."""
-    try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return default
-
-
-def _sort_value(row: Dict) -> float:
-    """Model sort order of a setting row; rows without one sort last."""
-    try:
-        return float(row.get("modelsort"))
-    except (TypeError, ValueError):
-        return float("inf")
+def classify(
+    found: int,
+    missing: int,
+    pattern: Optional[str],
+    device_id: Optional[str],
+) -> Optional[str]:
+    """
+    None when IPS gives the relay at least one pickup (or the mapping reads
+    none); otherwise NO_PROTECTION_SETTINGS (rule A) or PICKUPS_NOT_IN_IPS
+    (rule B).
+    """
+    if found or not missing:
+        return None
+    if is_switch_device_id(device_id):
+        return NO_PROTECTION_SETTINGS
+    if base_pattern(pattern) in NO_PICKUP_MEANS_NO_PROTECTION:
+        return NO_PROTECTION_SETTINGS
+    return PICKUPS_NOT_IN_IPS
