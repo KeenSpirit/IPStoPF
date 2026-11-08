@@ -215,6 +215,17 @@ def get_dig_lib_path_cache_file() -> Path:
     return TYPE_MAPPING_DIR / "dig_lib_paths.json"
 
 
+def get_named_fuse_types_file() -> Path:
+    """
+    Get the full path to the named fuse types file.
+
+    CSV mapping IPS fuse curves that are not a link class (HRC, ELF,
+    EFEN/HRC, E) and their rating to an ErgonLibrary TypFuse name. Read by
+    FuseTypeIndex.build. Lives next to type_mapping.csv.
+    """
+    return TYPE_MAPPING_DIR / "named_fuse_types.csv"
+
+
 def get_relay_map_file(filename: str) -> Path:
     """
     Get the full path to a relay mapping file.

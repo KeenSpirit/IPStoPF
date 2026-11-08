@@ -58,9 +58,10 @@ def fuse_setting(
         curve_type, rating, extraction_failed = _extract_fuse_parameters(
             device_object.settings
         )
-        if extraction_failed:
-            # The setting IS in IPS; its rows are malformed. "Not in IPS"
-            # here hid the difference.
+        if extraction_failed or not (curve_type.strip() or rating.strip()):
+            # The setting IS in IPS; its rows are malformed, or carry
+            # neither a curve nor a rating. "Not in IPS" (and for the blank
+            # rows "Type Matching Error") hid the difference.
             result.result = "IPS fuse setting incomplete"
             return result
         if is_solid_link(curve_type, device_object.settings):
@@ -192,8 +193,9 @@ def _find_matching_fuse(
     """
     # Use indexed lookup if available (O(1))
     if isinstance(fuse_index, FuseTypeIndex):
-        # Try curve + rating first
-        if curve_type and rating:
+        # Try curve + rating first. The rating may be in the curve field
+        # ('40 K'), so a blank rating does not skip this.
+        if curve_type:
             fuse = fuse_index.get_by_curve_and_rating(curve_type, rating)
             if fuse:
                 return fuse

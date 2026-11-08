@@ -18,9 +18,11 @@ Usage:
     fuse_type = fuse_index.get_by_curve_and_rating("K", "100A")
 """
 
+import csv
 import json
 import os
 import re
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Tuple
 
@@ -218,81 +220,233 @@ class RelayTypeIndex:
         return name in self._by_name
 
 
+# Fuse link names in ErgonLibrary end in the rating and class, e.g.
+# "FUSE LINK 11/22/33kV 20A CLASS K", "FUSE LINK 11/22/33kV  6/20A CLASS K"
+# (dual rated) or "FUSE LINK 11/22/33kV 8A CLASS T".
+_LINK_NAME = re.compile(
+    r"(?<![\d/.])(\d+(?:\.\d+)?(?:/\d+(?:\.\d+)?)?)\s*A\s+CLASS\s+([A-Z])\s*$",
+    re.IGNORECASE,
+)
+
+# IPS / STNW1001 ratings with no link of that size in the library, mapped to
+# the link fitted in the field. 63 -> 65: a 63A class K fuse is fitted as
+# the 65A class K link (ErgonLibrary has no 63A one). A rating with no link
+# and no alias (e.g. K 5A) stays a 'Type Matching Error' by design.
+RATING_ALIASES: Dict[Tuple[str, str], str] = {
+    ("K", "63"): "65",
+}
+
+# Columns of named_fuse_types.csv (config.paths.get_named_fuse_types_file):
+# fuses IPS describes by a curve name rather than a link class (HRC, ELF,
+# EFEN/HRC, E). A row with a blank typfuse_name is a placeholder: the fuse
+# stays a 'Type Matching Error' until the name is filled in.
+NAMED_FUSE_COLUMNS = ("ips_curve", "rating", "typfuse_name", "notes")
+
+_RATING_NUMBER = re.compile(r"(\d+(?:\.\d+)?(?:/\d+(?:\.\d+)?)?)")
+_CURVE_WITH_RATING = re.compile(r"^(\d+(?:\.\d+)?)\s*([A-Z])$")
+
+
+def normalise_rating(rating: Any) -> str:
+    """' 63A' / '63' / ' 6/20/' / '63.0' -> '63' / '6/20' ('' if none)."""
+    match = _RATING_NUMBER.search(str(rating or ""))
+    if not match:
+        return ""
+    value = match.group(1)
+    # '63.0' -> '63', but keep '31.5'
+    parts = [p[:-2] if p.endswith(".0") else p for p in value.split("/")]
+    return "/".join(parts)
+
+
+def normalise_curve(curve: Any) -> Tuple[str, str]:
+    """
+    IPS curve field -> (curve, rating found in the curve field).
+
+    ' K' -> ('K', ''); 'K Speed ' / 'K (Kmate)' -> ('K', ''); '40 K' ->
+    ('K', '40'); 'EFEN/HRC' -> ('EFEN/HRC', ''); '' -> ('', '').
+    """
+    text = " ".join(str(curve or "").upper().split())
+    if not text:
+        return "", ""
+    match = _CURVE_WITH_RATING.match(text)
+    if match:
+        return match.group(2), normalise_rating(match.group(1))
+    first = text.split(" ")[0]
+    # A single class letter followed by a description ('K SPEED',
+    # 'K (KMATE)') is that class.
+    if len(first) == 1 and first.isalpha():
+        return first, ""
+    return text, ""
+
+
+def load_named_fuse_types(path: Any) -> Dict[Tuple[str, str], str]:
+    """
+    Read named_fuse_types.csv into {(curve, rating): TypFuse name}.
+
+    Curve and rating are normalised as the IPS values are ('hrc' and
+    ' HRC' are the same curve, '20A' and '20' the same rating). Rows with a
+    blank typfuse_name are placeholders and skipped. Never raises: a
+    missing or unreadable file gives an empty table, with a log line.
+    """
+    named: Dict[Tuple[str, str], str] = {}
+    try:
+        with open(path, newline="", encoding="utf-8-sig") as fh:
+            rows = list(csv.DictReader(fh))
+    except FileNotFoundError:
+        logger.info(f"Fuse type index: no named fuse types file at {path}")
+        return named
+    except (OSError, csv.Error, UnicodeDecodeError) as exc:
+        logger.warning(f"Fuse type index: could not read {path}: {exc}")
+        return named
+
+    for line_no, row in enumerate(rows, start=2):
+        row = {
+            str(k).strip().lower(): (v or "").strip()
+            for k, v in row.items() if k is not None
+        }
+        name = row.get("typfuse_name", "")
+        if not name:
+            continue
+        curve, curve_rating = normalise_curve(row.get("ips_curve", ""))
+        rating = normalise_rating(row.get("rating", "")) or curve_rating
+        if not curve or not rating:
+            logger.warning(
+                f"Fuse type index: {Path(str(path)).name} line {line_no}: "
+                f"needs ips_curve and rating; row ignored"
+            )
+            continue
+        key = (curve, rating)
+        if key in named and named[key] != name:
+            logger.warning(
+                f"Fuse type index: {Path(str(path)).name} line {line_no}: "
+                f"{key} is listed twice; using '{name}'"
+            )
+        named[key] = name
+    return named
+
+
 @dataclass
 class FuseTypeIndex:
     """
     Indexed collection of PowerFactory fuse types for O(1) lookup.
 
-    Fuse types are matched by curve type (K, T, etc.) and rating (e.g., "100A").
-    This class provides multiple lookup strategies:
-    - Exact name match
-    - Curve + rating match
-    - Fuse size match (for Tx fuses)
+    Fuse links are keyed by (class, rating) parsed from the type name
+    ("FUSE LINK 11/22/33kV 20A CLASS K" -> ('K', '20')), so a lookup is an
+    exact match. The earlier rule keyed by the last character of the name
+    and matched the rating as a substring, which could never match a
+    multi-letter curve (HRC, ELF) and could pick a dual-rated link for a
+    single rating ('20' is in '6/20A').
 
     Attributes:
-        _by_name: Dictionary mapping fuse type name to PF object
-        _by_curve: Dictionary mapping curve letter to list of fuse types
-        _all_types: List of all fuse type objects (for compatibility)
+        _by_name: type name -> PF object (top folder and subfolders)
+        _by_key: (class, rating) -> PF object (top-folder fuse links)
+        _all_types: all fuse type objects (for compatibility)
     """
     _by_name: Dict[str, Any] = field(default_factory=dict)
-    _by_curve: Dict[str, List[Any]] = field(default_factory=dict)
+    _by_key: Dict[Tuple[str, str], Any] = field(default_factory=dict)
     _all_types: List[Any] = field(default_factory=list)
-
-    # Pattern to extract rating from fuse name (e.g., " 100A" from "HRC 100A K")
-    _RATING_PATTERN = re.compile(r'\s+(\d+)A')
+    _named: Dict[Tuple[str, str], str] = field(default_factory=dict)
 
     @classmethod
-    def build(cls, app) -> 'FuseTypeIndex':
-        """
-        Build the fuse type index from PowerFactory ErgonLibrary.
-
-        Args:
-            app: PowerFactory application object
-
-        Returns:
-            FuseTypeIndex with all fuse types indexed
-        """
+    def build(cls, app, named_path: Optional[Any] = None) -> 'FuseTypeIndex':
+        """Build the fuse type index from ErgonLibrary\\Protection\\Fuses."""
         index = cls()
-
         try:
             ergon_lib = app.GetGlobalLibrary()
             fuse_folder = ergon_lib.SearchObject(
                 r"\ErgonLibrary\Protection\Fuses.IntFolder"
             )
-
             if not fuse_folder:
                 app.PrintWarn("Fuse folder not found in ErgonLibrary")
                 return index
-
-            fuse_types = fuse_folder.GetContents("*.TypFuse", 0)
-
-            for fuse_type in fuse_types or []:
-                name = fuse_type.loc_name
-                index._by_name[name] = fuse_type
-                index._all_types.append(fuse_type)
-
-                # Index by curve type (last character of name)
-                curve = name[-1].upper()
-                if curve not in index._by_curve:
-                    index._by_curve[curve] = []
-                index._by_curve[curve].append(fuse_type)
-
+            top_level = fuse_folder.GetContents("*.TypFuse", 0) or []
+            nested = fuse_folder.GetContents("*.TypFuse", 1) or []
         except AttributeError:
-            pass
+            return index
 
+        top_names = {f.loc_name for f in top_level}
+        unparsed = []
+        for fuse_type in list(top_level) + [
+            f for f in nested if f.loc_name not in top_names
+        ]:
+            index.add(fuse_type, keyed=fuse_type.loc_name in top_names,
+                      unparsed=unparsed)
+
+        logger.info(
+            f"Fuse type index: {len(index._by_name)} types "
+            f"({len(top_names)} in the Fuses folder, {len(index._by_key)} "
+            f"keyed by class and rating)"
+        )
+        logger.info(f"Fuse type index: keyed {sorted(index._by_key)}")
+        if unparsed:
+            logger.info(
+                f"Fuse type index: Fuses-folder types with no class/rating "
+                f"in the name (name lookup only): {sorted(unparsed)}"
+            )
+
+        if named_path is None:
+            from config.paths import get_named_fuse_types_file
+            named_path = get_named_fuse_types_file()
+        index.set_named_types(load_named_fuse_types(named_path))
         return index
 
+    def set_named_types(self, named: Dict[Tuple[str, str], str]) -> None:
+        """Use a named-fuse table; names not in the library are dropped."""
+        missing = sorted(
+            {name for name in named.values() if name not in self._by_name}
+        )
+        if missing:
+            logger.warning(
+                f"Fuse type index: named_fuse_types.csv names TypFuses that "
+                f"are not in ErgonLibrary\\Protection\\Fuses (rows ignored): "
+                f"{missing}"
+            )
+        self._named = {
+            key: name for key, name in named.items() if name in self._by_name
+        }
+        if named:
+            logger.info(
+                f"Fuse type index: {len(self._named)} named fuse types in use"
+            )
+
+    def add(self, fuse_type: Any, keyed: bool = True,
+            unparsed: Optional[List[str]] = None) -> None:
+        """Index one TypFuse (separate from build so it can be tested)."""
+        name = fuse_type.loc_name
+        if name in self._by_name:
+            return
+        self._by_name[name] = fuse_type
+        self._all_types.append(fuse_type)
+        if not keyed:
+            return
+        match = _LINK_NAME.search(" ".join(name.split()))
+        if not match:
+            if unparsed is not None:
+                unparsed.append(name)
+            return
+        key = (match.group(2).upper(), normalise_rating(match.group(1)))
+        if key in self._by_key:
+            logger.warning(
+                f"Fuse type index: '{name}' and "
+                f"'{self._by_key[key].loc_name}' are both {key}; using the "
+                f"second"
+            )
+            return
+        self._by_key[key] = fuse_type
+
     def get(self, name: str) -> Optional[Any]:
-        """
-        Get a fuse type by exact name match.
-
-        Args:
-            name: The fuse type name
-
-        Returns:
-            The PowerFactory TypFuse object, or None if not found
-        """
+        """Get a fuse type by exact name."""
         return self._by_name.get(name)
+
+    def get_by_key(self, curve: str, rating: str) -> Optional[Any]:
+        """Exact (class, rating) lookup, then the rating alias, then the
+        named-type table."""
+        key = (curve, rating)
+        fuse = self._by_key.get(key)
+        if fuse is None and key in RATING_ALIASES:
+            fuse = self._by_key.get((curve, RATING_ALIASES[key]))
+        if fuse is None and key in self._named:
+            fuse = self._by_name.get(self._named[key])
+        return fuse
 
     def get_by_curve_and_rating(
         self,
@@ -300,55 +454,33 @@ class FuseTypeIndex:
         rating: str
     ) -> Optional[Any]:
         """
-        Find a fuse type matching the curve type and rating.
-
-        This is the primary lookup method for line fuses, matching
-        the logic previously in fuse_settings.fuse_setting().
+        Find the fuse type for an IPS curve and rating.
 
         Args:
-            curve_type: The curve type letter (e.g., "K", "T")
-            rating: The rating string (e.g., "100A", " 100/")
+            curve_type: IPS curve field ('K', ' K', '40 K', 'HRC', ...)
+            rating: IPS rating (' 63A', ' 6/20/', ...); may be empty when
+                the rating is in the curve field
 
         Returns:
             The matching PowerFactory TypFuse object, or None if not found
         """
-        curve_upper = curve_type.upper()
-
-        # Get all fuses with this curve type
-        candidates = self._by_curve.get(curve_upper, [])
-
-        for fuse in candidates:
-            if rating in fuse.loc_name:
-                return fuse
-
-        return None
+        curve, curve_rating = normalise_curve(curve_type)
+        rating_key = normalise_rating(rating) or curve_rating
+        if not curve or not rating_key:
+            return None
+        return self.get_by_key(curve, rating_key)
 
     def get_by_fuse_size(self, fuse_size: str) -> Optional[Any]:
         """
-        Find a fuse type matching the fuse size specification.
+        Find the fuse type for a Tx fuse size ("100K", "6/20K", "50T").
 
-        Used for Tx fuses where the size is determined by transformer rating.
-
-        Args:
-            fuse_size: The fuse size string (e.g., "100K", "50T")
-                      Last character is curve type, rest is rating
-
-        Returns:
-            The matching PowerFactory TypFuse object, or None if not found
+        Last character is the class, the rest is the rating.
         """
         if not fuse_size or len(fuse_size) < 2:
             return None
-
-        curve = fuse_size[-1].upper()
-        rating_prefix = fuse_size[:-1]
-
-        candidates = self._by_curve.get(curve, [])
-
-        for fuse in candidates:
-            if rating_prefix in fuse.loc_name:
-                return fuse
-
-        return None
+        return self.get_by_key(
+            fuse_size[-1].upper(), normalise_rating(fuse_size[:-1])
+        )
 
     def find_matching_fuse(
         self,
@@ -356,42 +488,17 @@ class FuseTypeIndex:
         rating: Optional[str] = None,
         fuse_size: Optional[str] = None
     ) -> Optional[Any]:
-        """
-        Find a matching fuse type using available criteria.
-
-        This is a convenience method that tries multiple matching strategies:
-        1. If curve_type and rating are provided, use get_by_curve_and_rating
-        2. If fuse_size is provided, use get_by_fuse_size
-
-        Args:
-            curve_type: The curve type letter (optional)
-            rating: The rating string (optional)
-            fuse_size: The fuse size specification (optional)
-
-        Returns:
-            The matching PowerFactory TypFuse object, or None if not found
-        """
-        # Try curve + rating first
-        if curve_type and rating:
-            result = self.get_by_curve_and_rating(curve_type, rating)
+        """Curve + rating first, then the Tx fuse size."""
+        if curve_type:
+            result = self.get_by_curve_and_rating(curve_type, rating or "")
             if result:
                 return result
-
-        # Fall back to fuse size
         if fuse_size:
             return self.get_by_fuse_size(fuse_size)
-
         return None
 
     def get_all(self) -> List[Any]:
-        """
-        Get all fuse types as a list.
-
-        Provided for backward compatibility with code expecting a list.
-
-        Returns:
-            List of all fuse type objects
-        """
+        """All fuse types as a list (backward compatibility)."""
         return self._all_types
 
     def __len__(self) -> int:
