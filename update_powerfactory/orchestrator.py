@@ -24,6 +24,7 @@ from update_powerfactory import fuse_settings as fs
 from update_powerfactory import ct_settings as cs
 from update_powerfactory import vt_settings as vs
 from update_powerfactory import pu_base_check as pbc
+from update_powerfactory import service_state as ss
 from update_powerfactory.type_index import (
     RelayTypeIndex,
     FuseTypeIndex,
@@ -114,7 +115,7 @@ def update_pf(
                     # settings (most have none); a placeholder with no type
                     # is kept out of service so it cannot reach ComShc.
                     if pf_obj.typ_id is None:
-                        pf_obj.SetAttribute("outserv", 1)
+                        ss.switch_off(pf_obj, "gas switch with no relay type")
                     result = UpdateResult.info_record(
                         pf_obj, "Gas switch - not in IPS, kept"
                     )
@@ -132,7 +133,7 @@ def update_pf(
                         pf_obj.Delete()
                         updates = True
                     else:
-                        pf_obj.SetAttribute("outserv", 1)
+                        ss.switch_off(pf_obj, "not in IPS")
                         result = UpdateResult.info_record(
                             pf_obj, "Set out of service - not in IPS"
                         )
@@ -144,6 +145,11 @@ def update_pf(
                     result = UpdateResult.not_in_ips(device_object)
                 results.append(result)
                 continue
+
+            # A relay an earlier run switched off (and marked) goes back
+            # in service before it is processed; finish() below settles
+            # whether it stays in. See service_state.
+            tracker = ss.begin(device_object.pf_obj)
 
             # Process device based on type
             try:
@@ -166,7 +172,13 @@ def update_pf(
             results.append(result)
 
             # Check if relay should be switched OOS
-            _switch_relay_oos(RELAYS_OOS, device_object)
+            oos_reason = _switch_relay_oos(RELAYS_OOS, device_object)
+
+            if ss.finish(
+                device_object.pf_obj, tracker,
+                getattr(result, "result", None) or oos_reason,
+            ):
+                updates = True
 
         # Commit all changes (success path).
         app.WriteChangesToDb()
@@ -177,6 +189,8 @@ def update_pf(
         if app.IsWriteCacheEnabled():
             app.WriteChangesToDb()
             app.SetWriteCacheEnabled(0)
+
+    ss.log_summary()
 
     # Repair any pu pickup whose Ipsetr/cpIpset were derived against a stale
     # base.
@@ -321,7 +335,7 @@ def _handle_setting_rejected(
     return result
 
 
-def _switch_relay_oos(relays_oos: List[str], device_object: Any) -> None:
+def _switch_relay_oos(relays_oos: List[str], device_object: Any) -> str:
     """
     Switch specific relay types out of service.
 
@@ -331,17 +345,25 @@ def _switch_relay_oos(relays_oos: List[str], device_object: Any) -> None:
     Args:
         relays_oos: List of relay pattern names to switch OOS
         device_object: The device to check and potentially switch OOS
+
+    Returns:
+        Why the relay was switched out of service here ('' if it was not),
+        for the out-of-service mark.
     """
+    reason = ""
     # Check if device pattern is in OOS list
     if device_object.device in relays_oos:
         device_object.pf_obj.SetAttribute("outserv", 1)
+        reason = "relay pattern is in RELAYS_OOS"
 
     # Check if associated switch is off
     try:
         if device_object.switch.on_off == 0:
             device_object.pf_obj.SetAttribute("outserv", 1)
+            reason = reason or "associated switch is open"
     except AttributeError:
         pass
+    return reason
 
 
 def _convert_results_to_dicts(

@@ -18,6 +18,7 @@ from utils.pf_utils import determine_fuse_role
 from ips_data import query_database as qd
 from ips_data.setting_index import SettingIndex
 from update_powerfactory.mapping_file import get_type_mapping
+from update_powerfactory import service_state
 from logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -145,7 +146,9 @@ def ee_device_list(
                     )
                     pf_device.Delete()
                 else:
-                    pf_device.SetAttribute("outserv", 1)
+                    service_state.switch_off(
+                        pf_device, "unusable plant number"
+                    )
                     data_capture_list.append(
                         UpdateResult.info_record(
                             pf_device,
@@ -271,7 +274,9 @@ def ergon_all_dev_list(
                     )
                     pf_device.Delete()
                 else:
-                    pf_device.SetAttribute("outserv", 1)
+                    service_state.switch_off(
+                        pf_device, "unusable plant number"
+                    )
                     data_capture_list.append(
                         UpdateResult.info_record(
                             pf_device,

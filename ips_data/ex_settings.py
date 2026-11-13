@@ -23,6 +23,7 @@ from ips_data import query_database as qd
 from ips_data.setting_index import SettingIndex
 
 from logging_config import get_logger
+from update_powerfactory import service_state
 
 logger = get_logger(__name__)
 
@@ -712,7 +713,7 @@ def reconcile_orphan_relays(
             )
             pf_device.Delete()
         else:
-            pf_device.SetAttribute("outserv", 1)
+            service_state.switch_off(pf_device, "orphan (no IPS match)")
             data_capture_list.append(
                 UpdateResult.info_record(
                     pf_device, "Set out of service - orphan (no IPS match)"
