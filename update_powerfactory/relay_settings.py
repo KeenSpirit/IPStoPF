@@ -245,14 +245,18 @@ def relay_settings(
     # The mapping file reads pickups but IPS gave this relay none (see
     # pickup_coverage). Rule A: IPS holds no protection settings (switch /
     # sectionaliser device ID, or a pattern whose mapping is proven) - out of
-    # service, handled like the NOJA case above. Rule B: the mapping file
+    # service, handled like the NOJA case above; likewise a record that
+    # has the elements' other settings but not their pickups. Rule B: the
+    # mapping file
     # does not read this IPS record - kept in service with model settings
     # and reported, so SPA results for it can be discounted until the
     # mapping file is fixed.
     pickup_outcome = _pickup_outcome(
         device_object, mapping_file, setting_dict, result
     )
-    if pickup_outcome == pc.NO_PROTECTION_SETTINGS:
+    if pickup_outcome in (
+        pc.NO_PROTECTION_SETTINGS, pc.PICKUPS_MISSING_FROM_RECORD
+    ):
         device_object.pf_obj.SetAttribute("outserv", 1)
         result.result = pickup_outcome
         return result, updates
@@ -448,7 +452,8 @@ def _pickup_outcome(
 
     None when an earlier step already recorded a result, when the relay has
     no type (no elements to protect with), or when IPS gave it at least one
-    pickup. Otherwise pc.NO_PROTECTION_SETTINGS (rule A) or
+    pickup. Otherwise pc.NO_PROTECTION_SETTINGS (rule A),
+    pc.PICKUPS_MISSING_FROM_RECORD (incomplete IPS record) or
     pc.PICKUPS_NOT_IN_IPS (rule B).
     """
     if result.result:
@@ -461,12 +466,23 @@ def _pickup_outcome(
         return None
 
     found, missing = pc.pickup_coverage(mapping_file, setting_dict)
+    other_settings = pc.other_element_settings(mapping_file, setting_dict)
     outcome = pc.classify(
         found, missing, device_object.device,
-        getattr(device_object, "device_id", None),
+        getattr(device_object, "device_id", None), other_settings,
     )
     name = getattr(pf_device, "loc_name", device_object.name)
-    if outcome == pc.NO_PROTECTION_SETTINGS:
+    if outcome == pc.PICKUPS_MISSING_FROM_RECORD:
+        logger.warning(
+            "%s: the IPS record gives %d other setting(s) of its "
+            "overcurrent elements but none of the %d pickup(s) the mapping "
+            "file reads for %s (%d IPS parameter(s)); pickups missing from "
+            "the IPS record, relay placed out of service. Correct the "
+            "record in IPS.",
+            name, other_settings, missing, device_object.device,
+            len(device_object.settings or []),
+        )
+    elif outcome == pc.NO_PROTECTION_SETTINGS:
         logger.info(
             "%s: none of the %d pickup(s) the mapping file reads for %s "
             "are in IPS (device ID %r, %d IPS parameter(s)); no protection "

@@ -14,6 +14,15 @@ Two different causes:
       (NO_PICKUP_MEANS_NO_PROTECTION), so finding none means IPS has none.
   The relay is placed out of service.
 
+* Pickups missing from the IPS record. A rule A pattern (not a switch or
+  sectionaliser device ID) whose record does carry other settings of its
+  overcurrent elements - curves, time multipliers, delays - but none of
+  the pickups: the record is incomplete, not empty. Seen on ARGUS1 records
+  imported by the 'Reyrolle ReyDisp Evolution' reader, which hold no
+  '... Setting=' (xIn) rows (Runcorn, 14 Nov 2026). The relay is placed
+  out of service, as for rule A, under its own result so the IPS record
+  can be corrected.
+
 * Rule B - the mapping file does not read this IPS record (WSOS4_Energex,
   CAPM2, ADVC2 WSOS5 V5.13.26, SEL351 ...: no relay on these patterns gets
   a pickup). The relay is a real protection device; it stays in service
@@ -27,6 +36,9 @@ from update_powerfactory.setting_utils import build_setting_key
 
 # Result strings (UpdateResult.result).
 NO_PROTECTION_SETTINGS = "No protection settings in IPS - placed out of service"
+PICKUPS_MISSING_FROM_RECORD = (
+    "Pickups missing from IPS record - placed out of service"
+)
 PICKUPS_NOT_IN_IPS = "No pickups found in IPS - model settings kept"
 
 # PF attributes that hold a pickup. Mirrors relay_settings.PICKUP_ATTRIBUTES.
@@ -115,6 +127,35 @@ def pickup_coverage(
     return found, missing
 
 
+def other_element_settings(
+    mapping_file: List[List[str]],
+    setting_dict: Dict[str, Any],
+) -> int:
+    """
+    How many non-pickup settings IPS gave the elements that have a pickup.
+
+    Counts the mapping rows that read IPS (curve, time multiplier, delay
+    ...; not outserv) for an element whose pickup is also read from IPS,
+    and for which create_setting_dictionary stored a value. Above zero
+    with no pickup found, the IPS record describes the overcurrent
+    elements but lacks their pickups.
+    """
+    pickup_elements = {
+        (line[0], line[1]) for line in mapping_file
+        if len(line) >= 4 and line[2] in PICKUP_ATTRIBUTES
+        and "use_setting" in line[4:]
+    }
+    return sum(
+        1 for line in mapping_file
+        if len(line) >= 4
+        and (line[0], line[1]) in pickup_elements
+        and line[2] not in PICKUP_ATTRIBUTES
+        and line[2] != "outserv"
+        and "use_setting" in line[4:]
+        and build_setting_key(line) in setting_dict
+    )
+
+
 def is_unit_protection(pattern: Optional[str]) -> bool:
     """True for a pilot-wire / line-differential pattern."""
     return base_pattern(pattern) in UNIT_PROTECTION_PATTERNS
@@ -125,10 +166,13 @@ def classify(
     missing: int,
     pattern: Optional[str],
     device_id: Optional[str],
+    other_settings: int = 0,
 ) -> Optional[str]:
     """
     None when IPS gives the relay at least one pickup (or the mapping reads
-    none); otherwise NO_PROTECTION_SETTINGS (rule A) or PICKUPS_NOT_IN_IPS
+    none); otherwise NO_PROTECTION_SETTINGS (rule A),
+    PICKUPS_MISSING_FROM_RECORD (a rule A pattern whose record has
+    other_settings of its overcurrent elements) or PICKUPS_NOT_IN_IPS
     (rule B).
     """
     if found or not missing:
@@ -136,5 +180,7 @@ def classify(
     if is_switch_device_id(device_id):
         return NO_PROTECTION_SETTINGS
     if base_pattern(pattern) in NO_PICKUP_MEANS_NO_PROTECTION:
+        if other_settings:
+            return PICKUPS_MISSING_FROM_RECORD
         return NO_PROTECTION_SETTINGS
     return PICKUPS_NOT_IN_IPS
