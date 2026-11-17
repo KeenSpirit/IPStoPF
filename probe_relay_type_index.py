@@ -61,13 +61,25 @@ from pathlib import Path
 # --------------------------------------------------------------------------
 # Configuration
 # --------------------------------------------------------------------------
-# PowerFactory startup: same values as export_pf_switches.py /
-# ips_to_pf_batch.py. The password comes from Windows Credential Manager
-# via keyring, as there.
+# PowerFactory startup, as in ips_to_pf_batch.py.
 PF_INSTALL_DIR = r"C:\Program Files\DIgSILENT\PowerFactory 2025 SP3"
 PF_PYTHON_DIR = rf"{PF_INSTALL_DIR}\Python\3.12"
-PF_INI_FILE = "PowerFactory_PRD.ini"
-CONFIG_YAML = r"C:\LocalData\ProtectionBatchRunner\config.yaml"
+
+# Credentials file: the first of these that exists is used. Put the path
+# ips_to_pf_batch.py uses (yaml_ini_file in run_main) first if it is not
+# listed. Two layouts are understood:
+#   pf_login.yaml   user / password / file_dir / ini_file at the top level;
+#                   login is GetApplicationExt(user, password,
+#                   '/ini "<file_dir>\<ini_file>"').
+#   config.yaml     powerfactory: user / file_dir; the password is read
+#                   from Windows Credential Manager with keyring and the
+#                   ini file is PF_INI_FILE in file_dir.
+CREDENTIALS_FILES = (
+    r"C:\LocalData\pf_login.yaml",
+    r"C:\LocalData\ProtectionBatchRunner\pf_login.yaml",
+    r"C:\LocalData\ProtectionBatchRunner\config.yaml",
+)
+PF_INI_FILE = "PowerFactory_PRD.ini"  # config.yaml layout only
 
 # The IPStoPF repo whose mapping files are read. Default: the folder this
 # script sits in (drop it next to build_relay_path_cache.py).
@@ -349,20 +361,69 @@ def build_bulk(app, needed):
 BUILDERS = {"json": build_json, "walk": build_walk, "bulk": build_bulk}
 
 
-def open_powerfactory():
-    """Engine-mode session, started as export_pf_switches.py does."""
+def find_credentials_file():
+    """First existing entry of CREDENTIALS_FILES, or None."""
+    for path in CREDENTIALS_FILES:
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def load_pf_login(path):
+    """
+    Read the credentials file. Returns (user, password, call_function,
+    layout). Raises ValueError with a plain message if the file cannot
+    supply a login. The password is never logged.
+    """
     import yaml
-    import keyring
+
+    with open(path) as fh:
+        data = yaml.safe_load(fh) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} is not a yaml mapping")
+
+    if isinstance(data.get("powerfactory"), dict):
+        import keyring
+
+        section = data["powerfactory"]
+        if not section.get("user"):
+            raise ValueError(f"No powerfactory: user in {path}")
+        user = str(section["user"])
+        password = keyring.get_password("PowerFactory", user)
+        file_dir = section.get("file_dir") or PF_INSTALL_DIR
+        call = f'/ini "{file_dir}\\{PF_INI_FILE}"'
+        layout = "config.yaml layout, password from Windows Credential Manager"
+        if not password:
+            raise ValueError(
+                f"Windows Credential Manager has no 'PowerFactory' password "
+                f"for user {user}"
+            )
+    else:
+        missing = [
+            key for key in ("user", "password", "file_dir", "ini_file")
+            if data.get(key) in (None, "")
+        ]
+        if missing:
+            raise ValueError(f"No {', '.join(missing)} attribute in {path}")
+        user = str(data["user"])
+        password = str(data["password"])
+        call = f'/ini "{data["file_dir"]}\\{data["ini_file"]}"'
+        layout = "pf_login.yaml layout"
+    return user, password, call, layout
+
+
+def open_powerfactory():
+    """Engine-mode session, logged in as ips_to_pf_batch.py does."""
+    path = find_credentials_file()
+    if path is None:
+        raise ValueError("No credentials file found (see CREDENTIALS_FILES)")
+    user, password, call, _layout = load_pf_login(path)
 
     os.add_dll_directory(PF_INSTALL_DIR)
     if PF_PYTHON_DIR not in sys.path:
         sys.path.append(PF_PYTHON_DIR)
     import powerfactory as pf
 
-    with open(CONFIG_YAML) as fh:
-        user = yaml.safe_load(fh)["powerfactory"]["user"]
-    password = keyring.get_password("PowerFactory", user)
-    call = f'/ini "{PF_INSTALL_DIR}\\{PF_INI_FILE}"'
     app = pf.GetApplicationExt(user, password, call)
     if app is None:
         raise RuntimeError("GetApplicationExt returned None")
@@ -683,6 +744,21 @@ def parent_main():
         if not needed:
             tee.log("type_mapping.csv yielded no model names; nothing to time")
             return 2
+        credentials = find_credentials_file()
+        if credentials is None:
+            tee.log("No PowerFactory credentials file found. Looked for:")
+            for path in CREDENTIALS_FILES:
+                tee.log(f"    {path}")
+            tee.log("Add the right path to CREDENTIALS_FILES and run again.")
+            return 2
+        try:
+            user, _password, call, layout = load_pf_login(credentials)
+        except Exception as exc:
+            tee.log(f"Cannot use {credentials}: {type(exc).__name__}: {exc}")
+            return 2
+        tee.log(f"Credentials: {credentials} ({layout})")
+        tee.log(f"PowerFactory user is {user}; call function is {call}")
+
         cache = load_path_cache()
         tee.log(
             f"{len(needed)} mapped model name(s); path cache has "
