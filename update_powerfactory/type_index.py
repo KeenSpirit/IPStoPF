@@ -8,11 +8,16 @@ The TypeIndex classes are designed to be built once at the start of
 processing and reused for all device updates, providing significant
 performance improvements when processing large numbers of devices.
 
+The relay index keeps its own name -> path cache for DIgSILENT library
+types (dig_lib_paths.json). The cache needs no upkeep: a mapped model it
+cannot supply triggers one folder walk of the DIgSILENT library, after
+which the cache is rewritten.
+
 Usage:
     # Build indexes once
     relay_index = RelayTypeIndex.build(app)
     fuse_index = FuseTypeIndex.build(app)
-    
+
     # O(1) lookups
     relay_type = relay_index.get("Generic SEL351 Relay")
     fuse_type = fuse_index.get_by_curve_and_rating("K", "100A")
@@ -22,6 +27,7 @@ import csv
 import json
 import os
 import re
+import time
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Tuple
@@ -30,6 +36,10 @@ from utils.pf_utils import all_relevant_objects
 from logging_config import get_logger
 
 logger = get_logger(__name__)
+
+# Progress line interval while the DIgSILENT library is being walked. The
+# walk is silent otherwise, and in a headless run silence looks like a hang.
+_WALK_HEARTBEAT_S = 30
 
 
 def _load_path_cache() -> Dict[str, str]:
@@ -56,6 +66,50 @@ def _save_path_cache(cache: Dict[str, str]) -> None:
         os.replace(tmp, target)
     except OSError as exc:
         logger.warning(f"Type index: could not save DIgSILENT path cache: {exc}")
+
+
+def _walk_digsilent_relay_types(global_library) -> Dict[str, List[Any]]:
+    """
+    Walk the DIgSILENT library's ProtRelay tree folder by folder.
+
+    Returns {type name: [TypRelay, ...]} in the order found; a name held by
+    more than one type keeps them all, first found first.
+
+    Folder by folder on purpose. On the execution VM (2026-11-17) this walk
+    took 150 s, while one recursive GetContents("*.TypRelay", 1) on the same
+    tree had not returned after 30 minutes.
+
+    Raises IndexError / AttributeError if the library is not where expected.
+    """
+    database = global_library.fold_id
+    dig_lib = database.GetContents("Lib")[0]
+    prot_lib = dig_lib.GetContents("Prot")[0]
+    pending = list(prot_lib.GetContents("ProtRelay") or [])
+
+    found: Dict[str, List[Any]] = {}
+    folders = types = 0
+    start = last_beat = time.monotonic()
+    while pending:
+        folder = pending.pop(0)
+        for relay_type in folder.GetContents("*.TypRelay", 0) or []:
+            found.setdefault(relay_type.loc_name, []).append(relay_type)
+            types += 1
+        sub_folders = list(folder.GetContents("*.IntFolder", 0) or [])
+        sub_folders += list(folder.GetContents("*.IntPrjfolder", 0) or [])
+        pending[:0] = sub_folders  # depth first, as all_relevant_objects
+        folders += 1
+        now = time.monotonic()
+        if now - last_beat >= _WALK_HEARTBEAT_S:
+            last_beat = now
+            logger.info(
+                f"Type index: DIgSILENT walk in progress - {folders} folders, "
+                f"{types} types, {now - start:.0f} s"
+            )
+    logger.info(
+        f"Type index: DIgSILENT walk done in {time.monotonic() - start:.0f} s "
+        f"({folders} folders, {types} types, {len(found)} names)"
+    )
+    return found
 
 
 @dataclass
@@ -123,12 +177,14 @@ class RelayTypeIndex:
             index._by_name[name] = relay_type  # local overrides library type
         logger.info(f"Type index: local walk done ({len(index)} types total)")
 
-        # ---- 3. DIgSILENT library: targeted resolution only --------------
-        # Full crawls of this tree took ~60 s co-located and 70+ min over WAN
-        # latency (Tablelands, 2026-07-15). Only the mapped model names from
-        # type_mapping.csv column E can ever be looked up, so resolve just the
-        # ones not already supplied by ErgonLibrary/local, via a persisted
-        # name->path cache with a server-side filtered search as fallback.
+        # ---- 3. DIgSILENT library: path cache, walk on a miss -------------
+        # Only the mapped model names from type_mapping.csv column E can ever
+        # be looked up, so resolve just the ones not already supplied by
+        # ErgonLibrary/local. Each is fetched by its cached full path
+        # (~15 s cold for the whole index on the VM). If any is not in the
+        # cache, or its path no longer resolves, the library is walked once
+        # (~150 s on the VM) and the cache rewritten, so the next process is
+        # fast again. Nobody has to maintain the file.
         #
         # Function-level import: update_powerfactory/__init__ imports this
         # module, so a top-level import of mapping_file would be circular at
@@ -145,48 +201,93 @@ class RelayTypeIndex:
             return index
 
         path_cache = _load_path_cache()
-        cache_dirty = False
-        cache_hits = 0
-        unresolved = []
-
+        valid_paths: Dict[str, str] = {}  # cached paths confirmed this run
+        to_find: List[str] = []
         for name in missing:
-            obj = None
-
-            # Fast path: direct fetch via cached full path, no tree walk.
             cached = path_cache.get(name)
-            if cached:
-                hit = global_library.SearchObject(cached)
-                if hit is not None and hit.loc_name == name:
-                    obj = hit
-                    cache_hits += 1
-                else:
-                    # Stale entry (library moved/renamed) - drop and re-resolve.
-                    path_cache.pop(name, None)
-                    cache_dirty = True
-
-            # No live tree search at runtime: discovery is the offline
-            # builder's job (build_relay_path_cache.py). A cache miss means
-            # the builder has not run since the mapping/library changed.
-            # 55 misses cost 6+ h of recursive WAN searches without ever
-            # finishing (Stanthorpe, 2026-07-18) - never pay that mid-batch.
-            if obj is not None:
-                index._by_name[name] = obj
-                index._all_types.append(obj)
+            hit = global_library.SearchObject(cached) if cached else None
+            if hit is not None and hit.loc_name == name:
+                index._by_name[name] = hit
+                index._all_types.append(hit)
+                valid_paths[name] = cached
             else:
-                unresolved.append(name)
-                logger.warning(
-                    f"Type index: mapped model '{name}' not in path cache; "
-                    f"run build_relay_path_cache.py to resolve it"
-                )
+                to_find.append(name)
 
         logger.info(
             f"Type index: DIgSILENT resolution done "
-            f"({cache_hits} via path cache, {len(unresolved)} unresolved)"
+            f"({len(valid_paths)} via path cache, {len(to_find)} not supplied "
+            f"by it)"
         )
-        if cache_dirty:
-            _save_path_cache(path_cache)
+        if to_find:
+            index._find_in_digsilent_library(global_library, to_find, valid_paths)
 
         return index
+
+    def _find_in_digsilent_library(
+        self,
+        global_library,
+        to_find: List[str],
+        valid_paths: Dict[str, str],
+    ) -> None:
+        """
+        Walk the DIgSILENT library for the models the path cache could not
+        supply, add them to the index and rewrite the cache.
+
+        Never raises: a failed walk is logged and the models stay
+        unresolved (their devices report a type matching error, as before).
+
+        Args:
+            global_library: app.GetGlobalLibrary()
+            to_find: mapped model names with no usable cache entry
+            valid_paths: name -> cached path confirmed this run; kept as is
+                in the rewritten cache
+        """
+        logger.info(
+            f"Type index: path cache cannot supply {to_find}; walking the "
+            f"DIgSILENT library (a few minutes on the VM)"
+        )
+        try:
+            found = _walk_digsilent_relay_types(global_library)
+        except Exception as exc:  # PF raises bare runtime errors too
+            logger.warning(
+                f"Type index: DIgSILENT library walk failed ({exc!r}); "
+                f"unresolved mapped model(s): {to_find}"
+            )
+            return
+
+        for name in to_find:
+            candidates = found.get(name)
+            if not candidates:
+                logger.warning(
+                    f"Type index: mapped model '{name}' found in NO library - "
+                    f"probable typo or renamed model in type_mapping.csv "
+                    f"column E. The library is walked on every run until "
+                    f"this is fixed"
+                )
+                continue
+            self._by_name[name] = candidates[0]
+            self._all_types.append(candidates[0])
+            if len(candidates) > 1:
+                paths = [c.GetFullName() for c in candidates]
+                logger.warning(
+                    f"Type index: '{name}' is held by {len(candidates)} "
+                    f"DIgSILENT types; using the first: {paths}"
+                )
+
+        # Rewrite the whole cache from the walk, so entries left stale by a
+        # library upgrade are refreshed in the same pass. Paths confirmed
+        # this run are kept: where a name is held by more than one type, the
+        # type already in use must not change under a later run.
+        new_cache = {
+            name: candidates[0].GetFullName()
+            for name, candidates in found.items()
+        }
+        new_cache.update(valid_paths)
+        _save_path_cache(new_cache)
+        logger.info(
+            f"Type index: DIgSILENT path cache rewritten "
+            f"({len(new_cache)} entries)"
+        )
 
     def get(self, name: str) -> Optional[Any]:
         """
