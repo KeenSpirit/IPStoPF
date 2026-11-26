@@ -38,7 +38,11 @@ class ProtectionDevice:
         date: Setting date from IPS
         pf_obj: PowerFactory device object
         ct_primary: CT primary current (amps)
-        ct_secondary: CT secondary current (amps)
+        ct_secondary: CT secondary current (amps), as IPS gives it: an int
+            when whole (1, 5), a float when not (2.89, 0.577). Never
+            rounded.
+        relay_rated_current: The relay's rated current In (1 or 5 A), the
+            base of its pu pickups. Derived from ct_secondary.
         vt_primary: VT primary voltage (volts)
         vt_secondary: VT secondary voltage (volts)
         ct_op_id: CT operation ID
@@ -107,7 +111,7 @@ class ProtectionDevice:
         # CT ratio programmed in the relay's own settings (0120/0121 etc.),
         # used to pick the right IPS transformer when several are linked.
         self._setting_ct_primary: Optional[int] = None
-        self._setting_ct_secondary: Optional[int] = None
+        self._setting_ct_secondary: Optional[float] = None
 
     def associated_settings(self, all_settings: Dict[str, List[Dict]]) -> None:
         """
@@ -137,8 +141,12 @@ class ProtectionDevice:
                     self.ct_primary = int(float(row["proposedsetting"]))
                     self._setting_ct_primary = self.ct_primary
                 elif param_name in ["0121", "In", "0A08"]:
-                    self.ct_secondary = int(float(row["proposedsetting"]))
-                    self._setting_ct_secondary = self.ct_secondary
+                    # Not truncated: int() turned a fractional value
+                    # into the amp below it (and anything under 1 into 0).
+                    secondary = isel.as_amps(row["proposedsetting"])
+                    if secondary is not None:
+                        self.ct_secondary = secondary
+                        self._setting_ct_secondary = secondary
             except (ValueError, KeyError, TypeError):
                 pass
 
@@ -327,16 +335,18 @@ class ProtectionDevice:
         Energex precedence is unchanged: a CT primary programmed in the relay
         settings that is larger than every IPS transformer is kept (the old
         'IT value only if larger' rule); otherwise the IPS pair is used.
-        Values stay integers as before. A fractional secondary (2.89 A /
-        0.577 A interposing CTs) is now ROUNDED to the nearest amp, floored
-        at 1 (int() truncated 2.89 to 2 and 0.577 to 0), and logged; see
-        isel.secondary_as_int.
+
+        The secondary is carried as IPS gives it. A fractional secondary
+        (2.89 A / 0.577 A interposing CTs) is NOT rounded: it goes to the
+        PowerFactory CT as it is, and the relay's rated current (5 A / 1 A,
+        see relay_rated_current) is what the pu pickups are based on. The
+        primary stays an integer as before.
         """
         for note in choice.notes:
             logger.warning(f"{self.name}: CT selection: {note}")
         if not choice.found:
             if choice.secondary is not None and self._setting_ct_secondary is None:
-                self.ct_secondary = isel.secondary_as_int(choice.secondary)
+                self._set_ct_secondary(choice.secondary)
             return
 
         if (relay_setting_wins_if_larger
@@ -351,14 +361,26 @@ class ProtectionDevice:
 
         self.ct_primary = _as_int(choice.primary, self.ct_primary)
         if choice.secondary is not None:
-            whole = isel.secondary_as_int(choice.secondary)
-            if choice.secondary != whole:
-                logger.warning(
-                    f"{self.name}: CT secondary {choice.secondary:g} A is not "
-                    f"a whole number; {whole} A used (PowerFactory CT data is "
-                    f"written as whole amps)"
-                )
-            self.ct_secondary = whole
+            self._set_ct_secondary(choice.secondary)
+
+    def _set_ct_secondary(self, value: float) -> None:
+        """Store an IPS CT secondary unrounded; an unusable one is skipped."""
+        secondary = isel.as_amps(value)
+        if secondary is None:
+            # 0 or negative. The old rounding floored these at 1 A without
+            # saying so.
+            logger.warning(
+                f"{self.name}: CT secondary {value:g} A in IPS is not "
+                f"usable; {self.ct_secondary:g} A kept"
+            )
+            return
+        self.ct_secondary = secondary
+        if isinstance(secondary, float):
+            logger.info(
+                f"{self.name}: CT secondary {secondary:g} A carried as it "
+                f"is (not rounded); relay rated current "
+                f"{self.relay_rated_current} A"
+            )
 
     def _apply_vt_choice(self, choice: "isel.TxChoice") -> None:
         for note in choice.notes:
@@ -367,6 +389,17 @@ class ProtectionDevice:
             self.vt_primary = _as_int(choice.primary, self.vt_primary)
         if choice.secondary is not None:
             self.vt_secondary = _as_int(choice.secondary, self.vt_secondary)
+
+    @property
+    def relay_rated_current(self) -> Optional[int]:
+        """
+        The relay's rated current In (1 or 5 A): the base of its pu pickups.
+
+        Equal to the CT secondary for 1 A and 5 A CTs. For a fractional
+        secondary it is the rating the CT feeds (2.89 -> 5, 0.577 -> 1);
+        see isel.relay_rated_current. None if the secondary is unusable.
+        """
+        return isel.relay_rated_current(self.ct_secondary)
 
     @property
     def ct_ratio(self) -> float:

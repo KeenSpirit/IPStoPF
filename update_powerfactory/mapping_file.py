@@ -24,8 +24,11 @@ File Locations:
 """
 
 import csv
+import math
 import os
 from typing import Dict, List, Optional, Set, Tuple, Any
+
+from core import instrument_selection as isel
 
 # Import paths from config
 from config.paths import (
@@ -160,8 +163,9 @@ def _normalise_ct_key(value: Any) -> Optional[str]:
 
     Accepts the CT Sec cell from type_mapping.csv (e.g. "", "1", "5") or a
     device's ct_secondary (e.g. 1, 5, 5.0, "5"). Blank/None values normalise
-    to None, meaning "not CT dependent". Numeric values normalise to their
-    integer string form so that "5", "5.0" and 5 all match.
+    to None, meaning "not CT dependent". Whole numbers normalise to their
+    integer string form so that "5", "5.0" and 5 all match. A fractional
+    value keeps its fraction ("2.89"); it used to be truncated to "2".
 
     Args:
         value: The raw CT secondary value
@@ -177,9 +181,12 @@ def _normalise_ct_key(value: Any) -> Optional[str]:
         return None
 
     try:
-        return str(int(float(text)))
+        number = float(text)
     except (ValueError, TypeError):
         return text
+    if not math.isfinite(number):
+        return text
+    return str(int(number)) if number == int(number) else f"{number:g}"
 
 
 def _load_type_mapping() -> Dict[str, Dict[Optional[str], Tuple[str, str]]]:
@@ -310,9 +317,12 @@ def _select_type_variant(
     - Non-CT-dependent pattern (only a None-keyed variant): return it,
       regardless of ct_secondary.
     - CT-dependent pattern: return the variant matching the supplied CT
-      secondary. If no CT secondary is given or it doesn't match a known
-      variant, fall back deterministically to a non-CT-dependent variant if
-      present, then to the 1 A variant, then to the lowest available key.
+      secondary, or failing that the variant for the relay's rated current
+      (a 2.89 A interposing CT feeds a 5 A relay, so it selects the 5 A
+      model; see isel.relay_rated_current). If no CT secondary is given or
+      neither matches a known variant, fall back deterministically to a
+      non-CT-dependent variant if present, then to the 1 A variant, then to
+      the lowest available key.
 
     Args:
         variants: Mapping of ct_key -> (mapping_filename, relay_type)
@@ -332,6 +342,9 @@ def _select_type_variant(
     key = _normalise_ct_key(ct_secondary)
     if key is not None and key in variants:
         return variants[key]
+    rated_key = _normalise_ct_key(isel.relay_rated_current(ct_secondary))
+    if rated_key is not None and rated_key in variants:
+        return variants[rated_key]
 
     # Fallbacks when the CT secondary is unknown or unmatched.
     if None in variants:

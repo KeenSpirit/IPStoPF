@@ -10,10 +10,12 @@ It includes:
 - Measurement element configuration
 """
 
-from typing import Any, Optional, Tuple
+import math
+from typing import Any, Iterable, Optional, Tuple
 
 from utils.pf_utils import all_relevant_objects
 from core import UpdateResult
+from core import instrument_selection as isel
 from logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -31,6 +33,35 @@ CT_SLOT_FILTERS = ("StaCt*", "StaCt*,StaCombi", "StaCt")
 def is_ct_slot(filtmod: Any) -> bool:
     """True when a relay-type slot filter is one of CT_SLOT_FILTERS."""
     return filtmod in CT_SLOT_FILTERS
+
+
+# Relative tolerance when comparing CT taps. PowerFactory may hand a
+# fractional tap back in single precision (2.89 -> 2.8900001), so ==
+# and "in" would miss a tap this script wrote itself and create the CT type
+# again on every run. Far tighter than the gap between real taps (2.887 and
+# 2.89 stay distinct).
+_TAP_TOL = 1e-4
+
+
+def same_tap(a: Any, b: Any) -> bool:
+    """True when two tap values are the same number (see _TAP_TOL)."""
+    try:
+        return math.isclose(float(a), float(b), rel_tol=_TAP_TOL)
+    except (TypeError, ValueError):
+        return False
+
+
+def has_tap(taps: Optional[Iterable], value: Any) -> bool:
+    """True when a TypCt tap list holds the value (see _TAP_TOL)."""
+    return any(same_tap(tap, value) for tap in taps or [])
+
+
+def _amps(value: Any) -> str:
+    """A tap value for names and log lines: 5, 600, 2.89 (never 5.0)."""
+    try:
+        return f"{float(value):.10g}"
+    except (TypeError, ValueError):
+        return str(value)
 
 
 def get_ct_library(app) -> Any:
@@ -122,13 +153,22 @@ def update_ct(
         #     result says why.
         return _handle_no_ips_ct(device_object, result)
 
-    secondary = int(float(device_object.ct_secondary))
+    # The secondary is written as IPS gives it: 2.89 A and 0.577 A
+    # interposing CTs are not rounded (TypCt and StaCt take decimals). A
+    # whole secondary is still written as an int, exactly as before.
+    secondary = isel.as_amps(device_object.ct_secondary)
+    if secondary is None:
+        raise ValueError(
+            f"CT secondary {device_object.ct_secondary!r} is not a "
+            f"positive number"
+        )
     current_trans = update_ct_slots(app, device_object)
     if current_trans is None:
         slots = _slot_filters(device_object.pf_obj)
         logger.warning(
             f"{device_object.pf_obj.loc_name}: relay type has no CT slot; "
-            f"CT {primary}/{secondary} not applied. Slot filters: {slots}"
+            f"CT {primary}/{_amps(secondary)} not applied. "
+            f"Slot filters: {slots}"
         )
         result.ct_result = "No CT slot on relay type"
         return result
@@ -152,8 +192,12 @@ def update_ct(
 
     result.set_ct_info(device_object.ct_op_id, "CT info updated")
 
-    # Check that measuring devices have matching CT secondary
-    check_update_measurement_elements(app, device_object.pf_obj, secondary)
+    # The measurement elements' nominal current is the relay's rated
+    # current (1 or 5 A), which is the CT secondary except behind a
+    # fractional-secondary CT (2.89 A -> 5 A relay).
+    check_update_measurement_elements(
+        app, device_object.pf_obj, isel.relay_rated_current(secondary)
+    )
 
     return result
 
@@ -247,7 +291,7 @@ def select_ct_type(
         app,
         ct_library: Any,
         primary: int,
-        secondary: int
+        secondary: float
 ) -> Any:
     """
     Check the local library for a suitable CT type or create a new one.
@@ -256,7 +300,8 @@ def select_ct_type(
         app: PowerFactory application object
         ct_library: The CT library folder
         primary: Primary tap setting
-        secondary: Secondary tap setting
+        secondary: Secondary tap setting (an int when whole, a float for a
+            fractional secondary such as 2.89)
 
     Returns:
         The PowerFactory TypCt object
@@ -266,10 +311,12 @@ def select_ct_type(
     for ct_type in ct_types:
         primary_taps = ct_type.GetAttribute("e:primtaps")
         secondary_taps = ct_type.GetAttribute("e:sectaps")
-        if primary in primary_taps and secondary in secondary_taps:
+        if has_tap(primary_taps, primary) and has_tap(secondary_taps, secondary):
             break
     else:
-        ct_type = ct_library.CreateObject("TypCt", "{}/{}".format(primary, secondary))
+        ct_type = ct_library.CreateObject(
+            "TypCt", "{}/{}".format(_amps(primary), _amps(secondary))
+        )
         ct_type.SetAttribute("e:primtaps", [primary])
         ct_type.SetAttribute("e:sectaps", [secondary])
 
@@ -333,8 +380,8 @@ def update_ct_slots(app, device_object: Any) -> Any:
                         break
 
                     if (
-                            obj.ptapset == device_object.ct_primary
-                            and obj.stapset == device_object.ct_secondary
+                            same_tap(obj.ptapset, device_object.ct_primary)
+                            and same_tap(obj.stapset, device_object.ct_secondary)
                             and not device_object.ct_op_id
                     ):
                         new_name = str()
@@ -357,24 +404,47 @@ def update_ct_slots(app, device_object: Any) -> Any:
 def check_update_measurement_elements(
         app,
         pf_device: Any,
-        secondary: int
+        rated_current: Optional[int]
 ) -> None:
     """
-    Update measurement elements with matching CT secondary rating.
+    Set the measurement elements' nominal current to the relay's rating.
 
-    Not all setting files have a setting that can define the secondary
-    rating of the CT. This function will use the CT secondary to configure
-    this attribute.
+    RelMeasure.Inom is the base PowerFactory converts every pu pickup
+    against (Ipsetr = Ipset x Inom), so it must be the relay's rated
+    current, not the CT secondary. The two are the same for 1 A and 5 A
+    CTs; behind a 2.89 A or 0.577 A CT the relay is rated 5 A or 1 A (see
+    isel.relay_rated_current).
+
+    A refusal used to be swallowed. It is now reported when it leaves a
+    different nominal current on the element, because every pu pickup on
+    that relay is then converted against the wrong base (the relay type's
+    measurement type does not offer the rating; compare issues log #9).
+    Elements with no Inom at all are skipped silently, as before.
 
     Args:
         app: PowerFactory application object
         pf_device: The PowerFactory relay object
-        secondary: The CT secondary rating
+        rated_current: The relay's rated current in amps (1 or 5)
     """
-    measurement_elements = pf_device.GetContents("*.RelMeasure")
+    if rated_current is None:
+        return
 
-    for element in measurement_elements:
+    left_at = []
+    for element in pf_device.GetContents("*.RelMeasure"):
         try:
-            element.SetAttribute("e:Inom", secondary)
+            element.SetAttribute("e:Inom", rated_current)
         except AttributeError:
-            pass
+            try:
+                kept = element.GetAttribute("e:Inom")
+            except AttributeError:
+                continue
+            if kept is not None and not same_tap(kept, rated_current):
+                left_at.append(f"{element.loc_name} {_amps(kept)} A")
+
+    if left_at:
+        logger.warning(
+            f"{pf_device.loc_name}: PowerFactory refused nominal current "
+            f"{rated_current} A (the relay's rated current) on "
+            f"{', '.join(left_at)}; pu pickups on this relay are converted "
+            f"against that base instead"
+        )

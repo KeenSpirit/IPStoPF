@@ -159,14 +159,23 @@ before it is written. Handled by `setting_adjustment` in
 
 | Value in the last column | Conversion applied |
 |--------------------------|--------------------|
-| `primary` | `setting / ct_primary` |
-| `secondary` | `setting / ct_secondary` |
-| `ctr` | `setting * ct_secondary / ct_primary` (full CT ratio) |
-| `perc_pu` | `(setting / 100) * ct_secondary` (percent → per-unit) |
+| `primary` | Primary amps → pu of the relay's rated current: `setting * ct_secondary / (ct_primary * rated)`, which is `setting / ct_primary` for a 1 A or 5 A CT |
+| `secondary` | Secondary amps → pu of the relay's rated current: `setting / rated` |
+| `ctr` | Primary amps → secondary amps: `setting * ct_secondary / ct_primary` (full CT ratio) |
+| `perc_pu` | Percent of the relay's rated current → secondary amps: `(setting / 100) * rated` |
 | `None` | No adjustment (for logic rows, this is the guard value at `[6]`). |
 | `+ value`, `- value`, `* value`, `/ value` | Math operation: apply the operator with the operand read from the row (`_apply_math_operation`). |
 
-A zero CT primary/secondary makes the ratio adjustments return `None`,
+`rated` is the relay's rated current In (1 A or 5 A), the value written
+to `RelMeasure.Inom` and therefore the base PowerFactory converts pu
+pickups against. For a 1 A or 5 A CT it is the CT secondary, so
+`secondary` is `setting / ct_secondary` and `perc_pu` is
+`(setting / 100) * ct_secondary`, as they always were. Behind a
+fractional-secondary CT (2.89 A or 0.577 A interposing CTs) the relay is
+rated 5 A or 1 A while `ct_secondary` keeps the fraction, and the two are
+no longer interchangeable.
+
+A zero CT primary (or an unusable CT secondary) makes these adjustments return `None`,
 which `set_attribute` treats as "skip this write" (guards against
 divide-by-zero writing garbage into the model).
 
@@ -218,8 +227,9 @@ Relay Model, OC1, Ipset, use_setting, , , None, , , secondary
   (`i = 0`) → this row consumes IPS setting 0.
 - `[6] = None` → for a setting row this is inert; it would be the
   adjustment guard only in a `_logic` row.
-- `[-1] = secondary` → the value is divided by the device's CT secondary
-  before being written to `e:Ipset`.
+- `[-1] = secondary` → the value is divided by the relay's rated current
+  (the CT secondary for a 1 A or 5 A CT) before being written to
+  `e:Ipset`.
 
 ## Worked example (logic row)
 

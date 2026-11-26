@@ -11,12 +11,17 @@ PowerFactory derives, at the instant e:Ipset is assigned:
 and then STORES both. It does not re-derive them if the CT link, the CT
 taps or the measurement element's Inom change afterwards.
 
+The pu base is the measurement element's Inom, which update_ct sets to the
+relay's rated current In: the CT secondary for 1 A and 5 A CTs, and 5 A or
+1 A behind a 2.89 A or 0.577 A CT (isel.relay_rated_current). For 1 A and
+5 A CTs In = stapset and the correct value below reduces to Ipset x ptapset.
+
 During an IPStoPF run some relays are momentarily in a state where the pu
 base reads as the CT PRIMARY tap instead of the secondary. Any Ipset
 written in that window is stored with one extra CT-ratio factor:
 
-    correct:   cpIpset = Ipset x ptapset
-    corrupted: cpIpset = Ipset x ptapset x (ptapset / stapset)
+    correct:   cpIpset = Ipset x In      x ptapset / stapset
+    corrupted: cpIpset = Ipset x ptapset x ptapset / stapset
 
 The transient does not survive the run. Diagnostic diag_pu_base.py,
 executed against the 4 September Cleveland copy, measured base = 5.0 (the
@@ -33,10 +38,11 @@ WHAT IT DOES
 ------------
 For every pickup element on every relay processed in the run:
 
-  * compute expected = Ipset x ptapset  (the pu base cancels out, so this
-    holds regardless of what the base happened to be)
+  * compute expected = Ipset x In x ptapset / stapset, with In taken from
+    the CT secondary (not read back from the model, so a measurement
+    element left on the wrong Inom still shows up as a mismatch)
   * if the stored cpIpset matches, do nothing
-  * if it is out by exactly ptapset / stapset, re-write Ipset with its own
+  * if it is out by exactly ptapset / In, re-write Ipset with its own
     current value, which forces PowerFactory to re-derive both values
     against the now-correct base, then verify
   * if it is out by any other factor, report it and DO NOT touch it
@@ -44,8 +50,8 @@ For every pickup element on every relay processed in the run:
 That last branch matters. "Minimum Current Multiplier" elements are
 referenced to their parent element's pickup, not to the CT (diag_pu_base
 measured bases of 30, 200 and 300 on X867537_RC10), so a plain
-cpIpset == Ipset x ptapset test would flag them as broken and corrupt
-them. Requiring the discrepancy to equal the CT ratio excludes them.
+cpIpset == expected test would flag them as broken and corrupt
+them. Requiring the discrepancy to equal ptapset / In excludes them.
 
 USAGE
 -----
@@ -61,6 +67,7 @@ end a project or the fleet run.
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
+from core import instrument_selection as isel
 from logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -164,10 +171,17 @@ def _check_element(
     relay_name: str,
     ptap: float,
     stap: float,
-    ct_ratio: float,
+    rated: float,
     summary: Dict[str, int],
 ) -> None:
-    """Verify one element's stored derivation and repair it if corrupted."""
+    """
+    Verify one element's stored derivation and repair it if corrupted.
+
+    rated is the relay's rated current In (the pu base). With a 1 A or 5 A
+    CT it equals stap, so expected is Ipset x ptap and the stale-base
+    signature is the CT ratio, as before.
+    """
+    signature = ptap / rated
     try:
         ipset = element.GetAttribute(ATTR_IPSET)
         cpipset = element.GetAttribute(ATTR_CPIPSET)
@@ -188,24 +202,30 @@ def _check_element(
         summary["skipped"] += 1
         return
 
-    expected = ipset * ptap
+    expected = ipset * ptap if rated == stap else ipset * rated * ptap / stap
     if _close(cpipset, expected):
         summary["ok"] += 1
         return
 
-    # Inconsistent. Only act when the discrepancy is exactly the CT ratio -
+    # Inconsistent. Only act when the discrepancy is exactly ptap / In (the
+    # CT ratio for a 1 A or 5 A CT) -
     # the signature of a pu conversion performed against the CT primary.
     # Anything else is a differently-referenced element (e.g. the
     # "Minimum Current Multiplier" elements, which are referenced to their
     # parent pickup) and must be left alone.
     factor = cpipset / expected if expected else None
-    if factor is None or not _close(factor, ct_ratio):
+    if factor is None or not _close(factor, signature):
+        basis = (
+            f"Ipset {ipset:g} x CT primary {ptap:g} A" if rated == stap else
+            f"Ipset {ipset:g} x rated current {rated:g} A x CT "
+            f"{ptap:g}/{stap:g}"
+        )
         logger.warning(
             f"{relay_name}/{_name(element)}: cpIpset {cpipset:g} A does not "
-            f"match Ipset {ipset:g} x CT primary {ptap:g} A "
+            f"match {basis} "
             f"(expected {expected:g} A, out by "
             f"{'x%g' % factor if factor else 'an unknown factor'}); this is "
-            f"not the stale-base signature (x{ct_ratio:g}) so it was left "
+            f"not the stale-base signature (x{signature:g}) so it was left "
             f"unchanged"
         )
         summary["unexpected"] += 1
@@ -306,10 +326,16 @@ def finalise_pu_derivations(app, device_list: List[Any]) -> Dict[str, int]:
             # and correct values are identical.
             continue
 
+        # The pu base update_ct wrote for this CT: the relay's rated
+        # current, which is stap itself for a 1 A or 5 A CT.
+        rated = isel.relay_rated_current(stap)
+        if rated is None or _close(stap, rated):
+            rated = stap
+
         summary["relays"] += 1
         for element in _pickup_elements(relay):
             summary["elements"] += 1
-            _check_element(element, relay_name, ptap, stap, ct_ratio, summary)
+            _check_element(element, relay_name, ptap, stap, rated, summary)
 
     logger.info(
         f"pu base finalisation: {summary['relays']} relay(s), "

@@ -293,11 +293,17 @@ def setting_adjustment(
     Adjust a setting value based on CT ratios or mathematical operations.
 
     The adjustment type is determined by the last column of the mapping file:
-    - "primary": Divide by CT primary
-    - "secondary": Divide by CT secondary
-    - "ctr": Apply CT ratio (setting * secondary / primary)
-    - "perc_pu": Convert percentage to per-unit using CT secondary
+    - "primary": primary amps -> pu of the relay's rated current
+    - "secondary": secondary amps -> pu of the relay's rated current
+    - "ctr": primary amps -> secondary amps (setting * secondary / primary)
+    - "perc_pu": percent of the relay's rated current -> secondary amps
     - Mathematical operation: Apply +, -, *, / with value from mapping file
+
+    The pu base is the relay's rated current In (RelMeasure.Inom), not the
+    CT secondary. They are the same number for 1 A and 5 A CTs, so those
+    relays convert exactly as before; behind a fractional-secondary CT
+    (2.89 A feeding a 5 A relay) they differ, and dividing by the CT
+    secondary would put the pickup out by 5 / 2.89.
 
     Args:
         app: PowerFactory application object
@@ -324,9 +330,14 @@ def setting_adjustment(
 
     if adjustment_type == "primary":
         primary = device_object.ct_primary
+        secondary = device_object.ct_secondary
+        rated = device_object.relay_rated_current
         if primary == 0:
             return None
-        return setting / primary
+        if not rated or secondary == rated:
+            return setting / primary
+        # pu of In = secondary amps / In, secondary amps = setting x S / P
+        return setting * secondary / (primary * rated)
 
     elif adjustment_type == "ctr":
         primary = device_object.ct_primary
@@ -336,14 +347,16 @@ def setting_adjustment(
         return setting * secondary / primary
 
     elif adjustment_type == "secondary":
-        secondary = device_object.ct_secondary
-        if secondary == 0:
+        rated = device_object.relay_rated_current
+        if not rated:
             return None
-        return setting / secondary
+        return setting / rated
 
     elif adjustment_type == "perc_pu":
-        secondary = device_object.ct_secondary
-        return (setting / 100) * secondary
+        rated = device_object.relay_rated_current
+        if not rated:
+            return None
+        return (setting / 100) * rated
 
     else:
         # Mathematical operation

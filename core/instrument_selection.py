@@ -37,6 +37,7 @@ otherwise the most common secondary is used and the ambiguity reported.
 The proper fix for Ergon is to carry the IT identity in the cached report.
 """
 
+import math
 import re
 from collections import Counter
 from dataclasses import dataclass, field
@@ -222,16 +223,45 @@ def _fmt(value: Optional[float]) -> str:
     return "?" if value is None else f"{value:g}"
 
 
-def secondary_as_int(value: float) -> int:
+def as_amps(value) -> Optional[float]:
     """
-    Whole-amp CT secondary for the integer-only downstream code.
+    A CT secondary as it is carried: the value IPS gives, never rounded.
 
-    IPS holds fractional secondaries (2.89 A and 0.577 A interposing CTs,
-    ~340 setting IDs across both reports). int() truncation turned 2.89
-    into 2 (+44% ratio error) and 0.577 into 0 (division by zero in the
-    'secondary' and 'ctr' adjustments). Rounding to the nearest amp,
-    floored at 1, keeps 2.89 within 4%. Callers log the substitution;
-    carrying the real value needs a Citrix check that TypCt/StaCt and
-    RelMeasure.Inom accept it.
+    Whole numbers come back as int (5.0 -> 5) so names, log lines and the
+    values written to PowerFactory read exactly as they did before;
+    fractional values stay float (2.89, 0.577). None for blanks,
+    non-numbers and values that are not positive (a secondary of 0 is not
+    a CT).
     """
-    return max(1, int(value + 0.5))
+    number = to_number(value)
+    if number is None or number <= 0 or number == float("inf"):
+        return None
+    return int(number) if number == int(number) else number
+
+
+# Rated input currents relays are built for.
+STANDARD_RELAY_RATINGS = (1, 5)
+
+
+def relay_rated_current(ct_secondary) -> Optional[int]:
+    """
+    The relay's rated current In (1 A or 5 A) for a CT secondary.
+
+    This is the base of every pu pickup (PowerFactory: RelMeasure.Inom)
+    and is NOT always the CT secondary: IPS holds 2.89 A and 0.577 A
+    secondaries (5/sqrt(3) and 1/sqrt(3) interposing or delta-connected
+    CTs, ~340 setting IDs across both reports) feeding 5 A and 1 A relays.
+    The rating nearest the secondary on a ratio scale is used, so
+
+        1 -> 1    5 -> 5    0.577 -> 1    2.89 -> 5
+
+    A 1 A or 5 A secondary is therefore its own rated current, as before.
+    None when the secondary is blank, not a number or not positive.
+    """
+    value = as_amps(ct_secondary)
+    if value is None:
+        return None
+    return min(
+        STANDARD_RELAY_RATINGS,
+        key=lambda rating: abs(math.log(value / rating)),
+    )
