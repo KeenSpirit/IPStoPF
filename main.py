@@ -67,18 +67,28 @@ Invocation and the two mode flags
 
 Return contract
 ---------------
-``main()`` returns:
-    - True/False  → transfer ran; flag indicates whether any settings
-                    were actually updated (``has_updates``).
-    - None        → the run was aborted or skipped before completion:
-                    batch config-validation failure, a subtransmission
-                    project reached in called_function mode, or a
-                    deliberate ``TransferError`` abort (no active
-                    project, no setting-ID data, user cancel).
+``main()`` returns True/False when the transfer ran to its end; the flag
+says whether any settings were actually updated (``has_updates``).
 
-    NOTE: the None-means-both-"skipped"-and-"aborted" ambiguity is a
-    known limitation (fix 1.3). Callers that need to distinguish
-    skipped from failed should not rely on the current return alone.
+A transfer that does not run to its end is reported differently in the
+two invocation contexts:
+
+    called_function True (batch)
+        ``main()`` never returns None. It raises:
+        - ``TransferSkipped``  the transfer did not start and the model
+                               is untouched: batch config-validation
+                               failure, or a subtransmission project.
+        - ``TransferError``    a deliberate abort part-way: no setting-ID
+                               data, switch matching failed.
+        - any other exception  an unexpected failure.
+        The batch layer must not version or assess the project after
+        any of these. Both classes are re-exported from this module
+        (``main.TransferSkipped``, ``main.TransferError``).
+
+    called_function False (interactive)
+        ``TransferError`` (including ``TransferSkipped``) is caught here,
+        logged, and ``main()`` returns None. The reason has already been
+        shown with PrintError.
 
 Batch-safety invariants (shared with the SPA layer)
 ---------------------------------------------------
@@ -135,6 +145,11 @@ from update_powerfactory import orchestrator
 from core import UpdateResult
 from core.update_result import CSV_COLUMNS
 from incremental import recorder as run_recorder
+
+# Re-exported for the batch layer (`except ips_to_pf.TransferSkipped`),
+# as start.py re-exports AssessmentError. See "Return contract" above.
+TransferError = qd.TransferError
+TransferSkipped = qd.TransferSkipped
 
 from importlib import reload
 
@@ -203,8 +218,15 @@ def _main(app=None, batch=True):
                 app.PrintError("Configuration validation failed for batch mode")
                 for error in result.errors:
                     app.PrintError(f"  {error}")
-                logger.error(f"Configuration validation failed: {result.errors}")
-                return None
+                # Nothing has been written to the model yet. Raised, not
+                # returned as None: the batch layer used to carry on to
+                # the version and the assessment as if the transfer had
+                # run. Logged by whoever handles it (below, or the batch
+                # layer).
+                raise qd.TransferSkipped(
+                    "Configuration validation failed: "
+                    + "; ".join(result.errors)
+                )
             # Print warnings but continue. PrintWarn is invisible in
             # headless runs, so they are logged as well.
             for warning in result.warnings:
@@ -235,8 +257,10 @@ def _main(app=None, batch=True):
                 app.PrintPlain(
                     "Subtransmission model skipped: interactive-only, not run in batch."
                 )
-                logger.info("Subtransmission project skipped (called_function mode)")
-                return
+                raise qd.TransferSkipped(
+                    "Subtransmission project: the transfer is "
+                    "interactive-only and is not run in batch"
+                )
             selected_region = ui.select_region()
 
             if selected_region == "Energex":
@@ -285,10 +309,11 @@ def _main(app=None, batch=True):
         logger.info(f"Result summary: {summarise_results(data_capture_list)}")
         logger.info(f"Updates applied: {has_updates}")
 
-        # Create file to save script information
+        # Create file to save script information. create_save_file
+        # returns a path or raises (folder cannot be created, old file
+        # locked); the model has been updated by now, so a failure here
+        # must surface as a failure.
         save_file = create_save_file(app, prjt, called_function)
-        if not save_file:
-            return
         write_dict_list_to_csv(
             data_capture_list, save_file, fieldnames=CSV_COLUMNS
         )
@@ -314,11 +339,12 @@ def _main(app=None, batch=True):
         run_recorder.mark_completed()
         return has_updates
     except qd.TransferError as exc:
-        # Deliberate aborts: no setting-ID data, no active project, or
-        # user cancel. In batch, re-raise so the mastering layer records
-        # this project as failed and moves on. Interactively, stop
-        # cleanly - error_message has already displayed the reason via
-        # PrintError, so no traceback is needed.
+        # Deliberate aborts: no setting-ID data, no active project, user
+        # cancel, or a transfer that did not start (TransferSkipped). In
+        # batch, re-raise so the mastering layer records the project as
+        # failed or skipped and moves on. Interactively, stop cleanly -
+        # the reason has already been displayed via PrintError, so no
+        # traceback is needed.
         if called_function:
             raise
         logger.error(f"Transfer aborted: {exc}")

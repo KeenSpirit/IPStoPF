@@ -207,6 +207,21 @@ class TransferError(Exception):
     """
 
 
+class TransferSkipped(TransferError):
+    """Raised when the transfer did not start for the active project.
+
+    Nothing in the model has been changed: the batch configuration is
+    invalid, or the project is one the batch does not transfer
+    (subtransmission is interactive-only). The message is the reason.
+
+    A subclass of ``TransferError``, so ``main()`` treats it the same
+    way (re-raised in batch, logged interactively). The batch layer
+    catches it by name and records the project as ``TRANSFER_SKIPPED``:
+    no ``IPS Import`` version and no assessment, since neither would
+    describe a model this run updated.
+    """
+
+
 def error_message(app, message: str) -> None:
     """
     Display an error message and abort the transfer.

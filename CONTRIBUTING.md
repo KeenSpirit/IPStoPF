@@ -110,8 +110,13 @@ same invariants hold in the SystemProtectionAssessment layer.
 - **Never call `exit()` / `sys.exit()` in library code.** A bare exit
   kills the entire ~80-project batch, not just the current project — and
   `exit(0)` reports false success to Task Scheduler. Deliberate aborts
-  raise `ips_data.query_database.TransferError` (or, for config,
-  `config.validation.ConfigInvalidError`), which `main()` catches.
+  raise `ips_data.query_database.TransferError`, or its subclass
+  `TransferSkipped` when the transfer has not started and the model is
+  untouched (invalid batch configuration, subtransmission project).
+  `main()` catches both interactively and re-raises them in batch.
+- **`main()` never returns `None` to the batch layer.** A transfer that
+  does not run to its end must raise: a `None` return was once read as
+  success, and the project was versioned and assessed without a transfer.
   `sys.exit` is acceptable only inside `if __name__ == "__main__"`.
 - **Model mutations must be restored on every exit path.** Echo, GUI-
   update, write-cache, and user-break state are set up and torn down in
